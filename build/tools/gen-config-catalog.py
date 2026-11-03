@@ -690,8 +690,8 @@ OVERLAY = {
                         "browser took part of its arena). Set it in the game's own file; read at session start."},
     "env.MADEIRA_KILL_REAP": {"category": "Wine core (ntdll)", "title": "End a killed program's resources like an exit",
                 "kind": "bool", "default": "1",
-                "note": "On by default: when one program ends another with TerminateProcess (Ubisoft Connect's launcher "
-                        "ends the game's first, injected process this way), its FEX code buffers, window and handles are "
+                "note": "On by default: when one program ends another with TerminateProcess (Ubisoft Connect's game starter "
+                        "ends the suspended copy of the game it could not inject into this way), its FEX code buffers, window and handles are "
                         "released as an exit would release them. Without it they stay allocated until the app ends and count "
                         "against every later program's code-buffer budget. 0 restores the old behaviour. Read once; \"[kill-reap]\" lines say when it ran.",
                 "sources": ["build/ntdll-unix/process_ios.c"]},
@@ -1514,6 +1514,14 @@ OVERLAY = {
                         "does (Far Cry 3 behind Ubisoft Connect exited after 15 s). Sleep(0) is unchanged. 0 restores the old "
                         "host sleep.",
                 "sources": ["tools/patch-wine-sleep-kernel-apc.py"]},
+    "env.MADEIRA_WOA_RECHECK": {"category": "Synchronisation", "title": "Infinite waits on an address re-check every second",
+                "kind": "text", "default": "",
+                "note": "On by default: in a 32-bit program, a lock or condition-variable wait without a time limit wakes "
+                        "once a second and ends if the thread was already woken (its wake-up never arrived) or the value it "
+                        "waits on changed, as a spurious wake-up, which every caller handles; otherwise it waits again. Each "
+                        "such case is logged ([woa-rescue]). Ubisoft Connect's browser stayed blank this way in 2 of 11 Far "
+                        "Cry 3 starts. 0 restores the plain infinite wait.",
+                "sources": ["tools/patch-wine-woa-recheck.py"]},
     "yield-mode": {"category": "Synchronisation", "title": "Yield primitive (SwitchToThread, Sleep(0))",
                 "kind": "choice", "default": "", "sources": ["tools/patch-wine-yield-mode.py"],
                 "choices": [("", "sched_yield (default)"), ("switch", "Switch, no priority drop"),

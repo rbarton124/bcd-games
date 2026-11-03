@@ -653,6 +653,9 @@ _r620['slay-the-spire-2'] = _r620['slay-the-spire-2'] + ['env.MADEIRA_X64_IMAGE_
 _r620['far-cry-3'] = _r620['far-cry-3'] + ['env.MADEIRA_REG_TRACE = 1']
 # v3: the AMD vendor/device id pair for DXMT's DXGI (farcry3_d3d11.exe's clear-value assumption; tested on one iPhone18,2, build 625).
 _r620['far-cry-3'] = _r620['far-cry-3'] + ['dxmt = dxgi.customVendorId=1002;dxgi.customDeviceId=7340', 'pool-split = 1']
+# v3, round 2 (2026-11-03): the split pool's retry (two of eleven starts kept one region and Ubisoft Connect ran out) and the plain 10 ms
+# audio beat (FAudio's voices broke up with the 60 ms lead).
+_r620['far-cry-3'] = _r620['far-cry-3'] + ['pool-split-retry = 1', 'env.MADEIRA_AUDIO_LEAD_MS = 0']
 # Round 624 (agent E2, S2b: BMVD7C): v3 serves Godot 4.5's composition swap chain on the game's window (build 624).
 _r620['slay-the-spire-2'] = _r620['slay-the-spire-2'] + ['env.MADEIRA_DXGI_SRC = 1', 'env.MADEIRA_DXGI_COMPOSITION = 1', 'env.MADEIRA_OPTIN_DLLS = dcomp']
 # Round 625 (agent L4 S1-a: ZXCXT5, BMVD7C): v4 switches the .NET runtime's write-xor-execute code memory off (the fail-fast at its write
@@ -663,7 +666,8 @@ for _id, _lines in _r620.items():
     assert presets[_id]['version'] == _r620_v.get(_id, 1) and presets[_id]['lines'][2:] == ['env.MADEIRA_EC_HOOK_TRACE = 0'] + _lines, (_id, presets[_id])
 assert presets['slay-the-spire-2']['line_builds'][-6:] == [(576, 1000000000), (624, 1000000000), (624, 1000000000), (624, 1000000000),
                                                           (576, 1000000000), (608, 1000000000)], presets['slay-the-spire-2']['line_builds']
-assert presets['far-cry-3']['line_builds'][-3:] == [(624, 1000000000), (577, 1000000000), (0, 1000000000)], presets['far-cry-3']['line_builds']
+assert presets['far-cry-3']['line_builds'][-5:] == [(624, 1000000000), (577, 1000000000), (0, 1000000000), (598, 1000000000),
+                                                   (626, 1000000000)], presets['far-cry-3']['line_builds']
 for _id, _line in (('forza-horizon-4', 'env.MADEIRA_OPTIN_DLLS = dxva2,gamingtcui'), ('big-walk', 'env.MADEIRA_REAL_SUSPEND = 1'),
                    ('ball-x-pit', 'env.MADEIRA_REAL_SUSPEND = 1')):
     _i = presets[_id]['lines'].index(_line)

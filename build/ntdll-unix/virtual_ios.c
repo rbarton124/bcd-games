@@ -5719,7 +5719,7 @@ void ios_jit_set_teb(uintptr_t teb)
  * use (async-signal-safe — the SEGV redirect runs on the faulting thread),
  * with a pthread-key fallback for early boot before the slot offset is
  * known. NULL = unknown → resolves to parent/default mapping entries. */
-void *ios_jit_current_peb(void)
+static TEB *ios_jit_current_teb(void)
 {
     extern pthread_key_t ios_teb_tls_key;
     extern int ios_teb_tls_slot_offset;
@@ -5733,8 +5733,22 @@ void *ios_jit_current_peb(void)
         cur_teb = *(char **)(tsd_base + ios_teb_tls_slot_offset);
     }
     if (!cur_teb && ios_teb_tls_key) cur_teb = pthread_getspecific(ios_teb_tls_key);
-    if (!cur_teb) return NULL;
-    return ((TEB *)cur_teb)->Peb;
+    return (TEB *)cur_teb;
+}
+
+void *ios_jit_current_peb(void)
+{
+    TEB *teb = ios_jit_current_teb();
+
+    return teb ? teb->Peb : NULL;
+}
+
+/* madeira-bcd pool-fg: the calling pseudo-process's id, from the same TEB (0 when unknown). */
+static ULONG ios_jit_current_pid(void)
+{
+    TEB *teb = ios_jit_current_teb();
+
+    return teb ? HandleToULong( teb->ClientId.UniqueProcess ) : 0;
 }
 
 /* Owner-aware main-image machine (X3 mixed-mode); registry in loader_ios.c. */
@@ -5755,7 +5769,10 @@ static size_t ios_pool_fg_adjust( size_t budget_cap, size_t head_now, size_t tai
     const WCHAR *path = NULL;
     PEB *peb;
     RTL_USER_PROCESS_PARAMETERS *pp;
-    static int log_n;
+    static ULONG logged_pid[64];   /* one line per process (the launcher's helpers no longer use up the lines before the game) */
+    static unsigned int logged_n;
+    ULONG pid;
+    unsigned int i;
     char name[48];
     int is_fg;
 
@@ -5766,9 +5783,11 @@ static size_t ios_pool_fg_adjust( size_t budget_cap, size_t head_now, size_t tai
     (void)head_now; (void)tail_now;
     is_fg = ios_pool_path_in_folder( path, len, folder, n );
     cap = ios_pool_code_class_cap( is_fg, budget_cap );
-    if (log_n < 32)
+    pid = ios_jit_current_pid();
+    for (i = 0; i < logged_n && logged_pid[i] != pid; i++) ;
+    if (i == logged_n && logged_n < 64)
     {
-        log_n++;
+        logged_pid[logged_n++] = pid;
         for (k = 0; path && k < len; k++) if (path[k] == '\\' || path[k] == '/') base = k + 1;
         for (k = 0; path && base + k < len && k < sizeof(name) - 1; k++) name[k] = path[base + k] < 0x80 ? (char)path[base + k] : '?';
         name[k] = 0;

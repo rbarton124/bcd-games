@@ -3,8 +3,8 @@
 """Host check: env.MADEIRA_KILL_REAP in build/ntdll-unix/process_ios.c (NtTerminateProcess on another process's handle).
 
 Why: a Windows process that another process ends never runs process_exit_wrapper, so its FEX code buffers (32 to 96 MB), guest window,
-fd cache and child-table slot stay allocated. Ubisoft Connect's launcher ends the game's first, injected process this way in every
-session (12 of 12 logs on BCD 0.1.625, an iPhone), and the buffers then count against every later program's code-buffer budget.
+fd cache and child-table slot stay allocated. Ubisoft Connect's game starter ends the suspended copy of the game it could not
+inject into this way in every session (12 of 12 logs on BCD 0.1.625, an iPhone), and the buffers then count against every later program's code-buffer budget.
 The change calls ios_end_child_process_async (the teardown the storm guard already uses for a child ended from outside) after the
 server accepted the kill. On by default, like the exit reclaim it completes; env.MADEIRA_KILL_REAP = 0 turns it off.
 

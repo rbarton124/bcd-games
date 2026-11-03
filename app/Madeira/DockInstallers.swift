@@ -482,6 +482,31 @@ enum DockInstallScripts {
         (sharedLauncherInstallers[fileName(executable)] ?? []).contains(where: exists)
     }
 
+    /// madeira-bcd: the lines a shared launcher needs in the session of a game that runs it, by its installer's file name (lower case),
+    /// as environment variables the app sets for that session only (DockInstallers.launcherSessionEnv, ContentView.startDock); the
+    /// game's own bcd.cfg lines are exported later and win. Ubisoft Connect: env.MADEIRA_APC_BUSY_QUEUE = 1, the line the EA app's
+    /// launcher entry has (BCDLaunchers.swift). Without it Far Cry 3's start stopped at Ubisoft's "Gamestarter must be initialized
+    /// before game can be launched" (2026-11-01, 2026-11-03 13:28: an overlapped pipe answer for a busy thread was dropped,
+    /// "[apc-requeue] ... dropped, no waiting thread"); with it the play session started in 6 of 6 sessions (2026-11-03).
+    static let sharedLauncherSessionEnv: [String: [String: String]] = [
+        "ubisoftconnectinstaller.exe": ["MADEIRA_APC_BUSY_QUEUE": "1"],
+    ]
+
+    /// madeira-bcd: every name sharedLauncherSessionEnv sets (a start without such a launcher clears them).
+    static var sharedLauncherSessionNames: [String] {
+        Array(Set(sharedLauncherSessionEnv.values.flatMap { $0.keys })).sorted()
+    }
+
+    /// madeira-bcd: the session lines of the shared launchers among `processes` (a game's install-script programs, whether they run
+    /// at this start or the launcher is already installed).
+    static func launcherSessionEnv(_ processes: [SteamInstallProcess]) -> [String: String] {
+        var env: [String: String] = [:]
+        for process in processes {
+            for (name, value) in sharedLauncherSessionEnv[fileName(process.executable)] ?? [:] where env[name] == nil { env[name] = value }
+        }
+        return env
+    }
+
     static func fileName(_ executable: String) -> String {
         (executable.split(separator: "\\").last.map(String.init) ?? executable).lowercased()
     }
@@ -837,6 +862,10 @@ enum DockInstallers {
     private(set) static var runsEAAppInstaller = false
     /// This start runs installers and turns madsync off for its session.
     private(set) static var serverSync = false
+    /// madeira-bcd: the environment lines this start's session gets for a shared launcher its game's install script runs (Ubisoft
+    /// Connect), whether its installer runs now or the launcher is installed (DockInstallScripts.sharedLauncherSessionEnv). Empty
+    /// for other games, and when MADEIRA_DOCK_INSTALLERS=0.
+    private(set) static var launcherSessionEnv: [String: String] = [:]
     /// This start's plan in words (the Dock sheet's status), nil when there is nothing to say.
     private(set) static var note: String?
     /// When poll first read the batch's end: the host starts next. nil before, and
@@ -1119,7 +1148,7 @@ enum DockInstallers {
                         has32Bit: Bool = DockInstallers.bundleHas32Bit, hasMsiexec: Bool = DockInstallers.bundleHasMsiexec,
                         hasWineMono: Bool = WineMonoModel.available,
                         fusionSource: URL? = Bundle.main.resourceURL?.appendingPathComponent("i386-windows/fusion.dll")) {
-        script = nil; serverSync = false; note = nil; finishedAt = nil; logged = []; runningSince = nil; installsOnly = false
+        script = nil; serverSync = false; note = nil; finishedAt = nil; logged = []; runningSince = nil; installsOnly = false; launcherSessionEnv = [:]
         allSucceeded = false; sessionPrograms = []; skipsNextStart = false; failedDirectX = false; sessionAppID = 0; runsEAAppInstaller = false
         let app = game.id
         sessionAppID = app
@@ -1143,6 +1172,7 @@ enum DockInstallers {
         }
         let defaultKey = flag("MADEIRA_INSTALL_DEFAULT_KEY")
         let (found, scripts) = Self.found(game, drive: drive, defaultKey: defaultKey)
+        launcherSessionEnv = DockInstallScripts.launcherSessionEnv(found)
         // A Record as done / Reset request saved since the last start, before the plan reads
         // the registry.
         applyRequest(game, found: found, prefix: prefix, drive: drive, others: others)

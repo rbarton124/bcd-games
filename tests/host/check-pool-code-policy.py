@@ -50,6 +50,9 @@ check("the helper reads the app's folder and the one off switch, and takes the i
       'getenv( "BCD_GAME_FOLDER" )' in helper and 'getenv( "MADEIRA_POOL_CODE_FOREGROUND" )' in helper
       and "ios_jit_current_peb()" in helper and "pp->ImagePathName.Buffer" in helper
       and "if (!n || (off && !strcmp( off, \"0\" ))) return budget_cap;" in helper)
+check("the log line is written once per process (by its id), for up to 64 processes",
+      "pid = ios_jit_current_pid();" in helper and "if (i == logged_n && logged_n < 64)" in helper and "logged_pid[logged_n++] = pid;" in helper
+      and "static ULONG ios_jit_current_pid(void)" in SRC and "return teb ? teb->Peb : NULL;" in function("void *ios_jit_current_peb(void)\n{"))
 # the app's side (Swift, read as source slices: no swiftc here): who publishes the folder, and that a session's end takes it away
 APP = ROOT / "app/Madeira"
 lib, dock, bridge = ((APP / n).read_text() for n in ("Library.swift", "MadeiraDock.swift", "WineProcessBridge.m"))
@@ -73,6 +76,21 @@ check("the session's end unsets it, and only the app sets it",
 check("no program names and no lists", "MADEIRA_POOL_FG_PROCS" not in SRC and "MADEIRA_POOL_BG_PROCS" not in SRC
       and ".exe" not in region.split("*/", 1)[1].replace("farcry3_d3d11.exe", "").replace("fc3_blooddragon_d3d11.exe", ""))
 
+# the helper's own log lines are counted (only the helper's dprintf is replaced)
+COUNT = r'''
+#include <stdarg.h>
+#include <string.h>
+static int n_fg_lines, log_mark;
+static int log_count( void ) { return n_fg_lines; }
+static int pool_fg_dprintf( int fd, const char *fmt, ... )
+{
+    va_list a; int r;
+    if (strstr( fmt, "[pool-fg]" )) n_fg_lines++;
+    va_start( a, fmt ); r = vdprintf( fd, fmt, a ); va_end( a );
+    return r;
+}
+#define dprintf pool_fg_dprintf
+'''
 HARNESS = r'''
 #include <stdio.h>
 #include <stdlib.h>
@@ -84,11 +102,14 @@ typedef unsigned short USHORT;
 typedef struct { USHORT Length, MaximumLength; WCHAR *Buffer; } UNICODE_STRING;
 typedef struct { UNICODE_STRING ImagePathName; } RTL_USER_PROCESS_PARAMETERS;
 typedef struct { RTL_USER_PROCESS_PARAMETERS *ProcessParameters; } PEB;
+typedef unsigned int ULONG;
 #define MB ((size_t)1 << 20)
 static size_t ios_pool_head_reserve;
 static PEB *current;
+static ULONG current_pid;
 static void *ios_jit_current_peb( void ) { return current; }
-''' + funcs + region + helper + r'''
+static ULONG ios_jit_current_pid( void ) { return current_pid; }
+''' + funcs + region + COUNT + helper + "#undef dprintf\n" + r'''
 static int fails;
 #define T(c) do { if (!(c)) { printf( "FAIL line %d: %s\n", __LINE__, #c ); fails++; } } while (0)
 #define TOTAL 0x37410000u
@@ -112,6 +133,7 @@ static int inside( const char *folder, const char *path )
     size_t len = wide( path );
     return ios_pool_path_in_folder( wbuf, len, folder, ios_pool_game_folder_len( folder ) );
 }
+static int pid_fixed;
 /* the production helper as the caller sees it: `path` is the calling process's image, NULL for no PEB */
 static size_t adjusted( const char *folder, const char *off, const char *path, size_t head, size_t tail )
 {
@@ -124,6 +146,7 @@ static size_t adjusted( const char *folder, const char *off, const char *path, s
     pp.ImagePathName.Buffer = wbuf;
     pp.ImagePathName.Length = (USHORT)(wide( path ? path : "" ) * sizeof(WCHAR));
     current = path ? &peb : NULL;
+    if (!pid_fixed) current_pid = path ? 0x100 + (ULONG)strlen( path ) : 0;   /* one process per program (the same PEB, as a reused window) */
     budget = ios_pool_code_cap( TOTAL, head, tail, HO, HE, ios_pool_head_reserve );
     return ios_pool_fg_adjust( budget, head, tail );
 }
@@ -186,7 +209,21 @@ int main( void )
     T( adjusted( fc3, "0", game, 0x13fd0000, 0x20410000 ) == 16 * MB );
     T( adjusted( fc3, "1", upc, 0x124ac000, 0x08000000 ) == 32 * MB );           /* any other value: on */
     T( adjusted( fc3, NULL, NULL, 0x124ac000, 0x08000000 ) == 32 * MB );         /* no PEB: another program */
-    puts( fails ? "FAILED" : "ok: log rows, the game keeps today's cap, others at most 32 MB, two overlapping generations, folder rule, helper and off switch" );
+    /* one line per process: the same process again writes none; a new process in the same window (same PEB) writes its own */
+    {
+        int i;
+        fflush( stderr );
+        log_mark = log_count();
+        T( adjusted( fc3, NULL, game, 0x13fd0000, 0x20410000 ) == 16 * MB && log_count() == log_mark );   /* the game's process: logged above */
+        pid_fixed = 1;
+        current_pid = 0x777;                                                                               /* the copy the starter starts next */
+        T( adjusted( fc3, NULL, game, 0x13fd0000, 0x20410000 ) == 16 * MB && log_count() == log_mark + 1 );
+        T( adjusted( fc3, NULL, game, 0x13fd0000, 0x20410000 ) == 16 * MB && log_count() == log_mark + 1 );
+        for (i = 0; i < 100; i++) { current_pid = 0x1000 + i; adjusted( fc3, NULL, upc, 0x124ac000, 0x08000000 ); }
+        T( log_count() <= 64 );                                                                             /* at most 64 processes */
+        pid_fixed = 0;
+    }
+    puts( fails ? "FAILED" : "ok: log rows, the game keeps today's cap, others at most 32 MB, two overlapping generations, folder rule, helper and off switch, one line per process" );
     return fails != 0;
 }
 '''
@@ -204,7 +241,7 @@ with tempfile.TemporaryDirectory() as tmp:
         check("the policy behaves as documented", run.returncode == 0, out)
         check("the helper's log line names the program and its class",
               '[pool-fg] madeira-bcd: farcry3_d3d11.exe is the program being played (game folder "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Far Cry 3"): '
-              "code-buffer cap 0x4000000, 0x4000000 without the policy" in run.stderr
+              "code-buffer cap 0x1000000, 0x1000000 without the policy" in run.stderr
               and "[pool-fg] madeira-bcd: upc.exe is another program" in run.stderr
               and "[pool-fg] madeira-bcd: (no image path) is another program" in run.stderr, run.stderr[-1500:])
 sys.exit(0 if ok else 1)

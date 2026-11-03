@@ -4185,8 +4185,8 @@ void ios_wow32_stack_dump( const char *tag )
 /* kill-reap-test:begin (tests/host/check-kill-reap.py compiles this region) */
 /* madeira-bcd kill-reap: a Windows process that ANOTHER process ends with NtTerminateProcess( its handle ) never runs
  * process_exit_wrapper (the server's SIGQUIT does not arrive on iOS and its threads end in abort_thread), so its FEX code buffers,
- * guest window, fd cache and child-table slot stayed allocated for the rest of the session. Ubisoft Connect's launcher ends the
- * game's first, injected process this way in every session; the buffers (32 to 96 MB) then count against every later program's
+ * guest window, fd cache and child-table slot stayed allocated for the rest of the session. Ubisoft Connect's game starter ends the
+ * suspended copy of the game it could not inject into this way in every session; the buffers (32 to 96 MB) then count against every later program's
  * budget. The caller now runs, after the server accepted the kill, the same teardown the storm guard
  * already runs for a child ended from outside (ios_end_child_process_async: close the master socket, child table, dead-PEB list,
  * fd cache, JIT allocations, guest window). On by default, like the exit reclaim it completes; env.MADEIRA_KILL_REAP = 0

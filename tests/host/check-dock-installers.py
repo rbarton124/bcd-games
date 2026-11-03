@@ -91,9 +91,11 @@ require(re.findall(r'"([^"]+)":', table) == ['ubisoftconnectinstaller.exe']
         and re.findall(r'"(C:[^"]+)"', table) == ['C:\\\\Program Files (x86)\\\\Ubisoft\\\\Ubisoft Game Launcher\\\\UbisoftConnect.exe',
                                                    'C:\\\\Program Files (x86)\\\\Ubisoft\\\\Ubisoft Game Launcher\\\\upc.exe'],
         'the shared launcher table: Ubisoft Connect\'s installer and its two programs, nothing else')
-code_only = '\n'.join(l for l in installers.replace(table, '').splitlines() if not l.strip().startswith('//'))
+session_table = installers[installers.index('    static let sharedLauncherSessionEnv: [String: [String: String]] = ['):]
+session_table = session_table[:session_table.index('\n    ]\n')]
+code_only = '\n'.join(l for l in installers.replace(table, '').replace(session_table, '').splitlines() if not l.strip().startswith('//'))
 require(installers.count('sharedLauncherInstallers[') == 2 and 'ubisoft' not in code_only.lower() and 'upc.exe' not in code_only.lower(),
-        'the launcher\'s names live in the table only (and in comments)')
+        'the launcher\'s names live in the two tables only (and in comments)')
 require('|| DockInstallScripts.installsPresentLauncher($0.executable, exists: { path in isFile(path, drive: drive) })' in installers
         and 'for by in ["Wine Mono", "BCD", launcherProvider] {' in installers
         and 'static func prepare(_ game: DockGame, drive: URL, prefix: URL, others: [DockGame] = [],\n                        has32Bit:' in installers,
@@ -113,6 +115,21 @@ require(content.count('setenv("MADEIRA_MADSYNC_SESSION", "0", 1)') == 1 and
         'unsetenv("MADEIRA_MADSYNC_SESSION")' in content, 'madsync is turned off only for a Dock start that runs installers')
 for name, text in [('MadeiraDock.swift', dock), ('MadeiraDockModel.swift', view), ('BCDDock.swift', bcd_dock)]:
     require('MADEIRA_MADSYNC_SESSION' not in text, f'{name}: does not touch the madsync session switch')
+# madeira-bcd: a shared launcher's session lines (Ubisoft Connect: env.MADEIRA_APC_BUSY_QUEUE = 1), set by startDock for this start only.
+require('static let sharedLauncherSessionEnv: [String: [String: String]] = [\n        "ubisoftconnectinstaller.exe": ["MADEIRA_APC_BUSY_QUEUE": "1"],\n    ]'
+        in installers, 'Ubisoft Connect\'s session line is the busy queue, keyed by its installer, and nothing else')
+require(installers.count('launcherSessionEnv = [:]') == 1 and
+        'let (found, scripts) = Self.found(game, drive: drive, defaultKey: defaultKey)\n        launcherSessionEnv = DockInstallScripts.launcherSessionEnv(found)' in installers,
+        'prepare() clears the lines first and takes them from every program of the install script, run or provided')
+start_at = content.index('private func startDock(')
+sd = content[start_at:content.index('\n    }\n', start_at)]
+unset_loop = 'for name in DockInstallScripts.sharedLauncherSessionNames where DockInstallers.launcherSessionEnv[name] == nil { unsetenv(name) }'
+set_loop = 'for (name, value) in DockInstallers.launcherSessionEnv.sorted(by: { $0.key < $1.key }) {\n                setenv(name, value, 1)'
+require(sd.count(unset_loop) == 1 and sd.count(set_loop) == 1
+        and sd.index('unsetenv("MADEIRA_MADSYNC_SESSION")') < sd.index(unset_loop) < sd.index(set_loop) < sd.index('MadeiraDock.requestLaunch('),
+        'startDock sets the lines for this session after the madsync step, clears them for a game without the launcher, before the launch request')
+require(content.count('DockInstallers.launcherSessionEnv') == 2 and '[dock-installers] the game\'s install script runs a shared launcher: ' in sd,
+        'only startDock reads them, and it logs each line it sets')
 start = content.index('private func startDock(')
 body = content[start:content.index('\n    }\n', start)]
 require(body.index('try MadeiraDock.writeHandoff(') < body.index('DockInstallers.prepare(') < body.index('runWineFullSequence('),
@@ -729,6 +746,7 @@ func pe(_ url: URL, machine: UInt16) throws {
         // No launcher in the prefix: the installer runs as before.
         let ubiFirst = try ubiGame(7050, "Ubi")
         DockInstallers.prepare(ubiFirst, drive: drive, prefix: prefix, has32Bit: true, hasMsiexec: true, hasWineMono: true, fusionSource: nil)
+        require(DockInstallers.launcherSessionEnv == ["MADEIRA_APC_BUSY_QUEUE": "1"], "a Ubisoft game's session gets Ubisoft Connect's busy queue line")
         let ubiBatch0 = (try? String(contentsOf: drive.appendingPathComponent("bcd-dock-installers.cmd"), encoding: .utf8)) ?? ""
         require(ubiBatch0.contains("UbisoftConnectInstaller.exe") && ubiBatch0.contains("vc.exe") && !logged("app=7050 program=ubisoft connect pc client skipped"),
                 "no launcher in the prefix: the batch runs the installer")
@@ -840,6 +858,7 @@ func pe(_ url: URL, machine: UInt16) throws {
         let rock = try dxGame(7020, "Rock", rockEntries)
         var mark = now()
         start(rock)
+        require(DockInstallers.launcherSessionEnv.isEmpty, "a game without a shared launcher's installer gets no launcher lines")
         var out = since(mark)
         ledger = DockInstallLedger.load(prefix: prefix)
         require(DockInstallers.script != nil && DockInstallers.installsOnly && out.contains("app=7020 choice=run pending=2; the next start skips them") &&

@@ -4198,7 +4198,9 @@
         {"line": "env.MADEIRA_DOCK_SCRIPT_REGISTRY = 1", "minBuild": 591},
         {"line": "env.MADEIRA_REG_TRACE = 1", "minBuild": 624},
         {"line": "dxmt = dxgi.customVendorId=1002;dxgi.customDeviceId=7340", "minBuild": 577},
-        "pool-split = 1"
+        "pool-split = 1",
+        {"line": "pool-split-retry = 1", "minBuild": 598},
+        {"line": "env.MADEIRA_AUDIO_LEAD_MS = 0", "minBuild": 626}
       ],
       "notes": [
         "Far Cry 3 (Steam 220240, BCD Dock), round 620, iPad17,3, build 614 (Send Logs 2H38A0 = 65GSHJ, 7VRX47 = WMGAZ8, X9ZXFB):",
@@ -4221,7 +4223,13 @@
         "the Direct3D 9 adapter (d3d9.custom*) and Windows' own adapter keep reporting Apple. gpu-card = amd would change all three and the",
         "video memory Windows reports; not tried on a device. pool-split = 1: the session's JIT pool gets its second region (about 880 MB",
         "instead of 544-624): Ubisoft Connect's processes and the game need more than one region holds (every session of the same",
-        "device with a pool under 650 MB ran out; the split sessions peaked at 96-98 %)."
+        "device with a pool under 650 MB ran out; the split sessions peaked at 96-98 %).",
+        "Round 2 (iPhone18,2, eleven sessions, 2026-11-03): pool-split-retry = 1: in 2 of 11 starts the second region landed below the",
+        "first (\"[pool-split] the second region landed at 0x125000000 ... the pool stays one region\", 544-592 MB) and Ubisoft Connect's",
+        "processes ran out of pool before its window appeared (\"EXEC ALLOC FAILED ... JIT pool exhausted\", \"CEF render process crashed\");",
+        "no session with a pool under 650 MB was playable. env.MADEIRA_AUDIO_LEAD_MS = 0: the game's FAudio voices played cleanly with it",
+        "(three sessions) and broke up without it (three sessions); with the 60 ms lead FAudio renders several quanta per wake instead of",
+        "one per 10 ms. Game sessions ran at 35-39 fps average (low 1% 24-29) from Steam through BCD Dock."
       ]
     },
     {
