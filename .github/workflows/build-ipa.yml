@@ -1365,6 +1365,7 @@ jobs:
           python3 tests/host/check-pool-low.py
           python3 tests/host/check-pool-code-exit.py
           python3 tests/host/check-kill-reap.py
+          python3 tests/host/check-pool-code-policy.py
 
       # ajan2-tani: failure-path-only guest diagnostics ([entry-fail] for FEX's hlt / NoExec thunks,
       # [badrip] for a non-canonical guest RIP, [wow-initblock] when an i386 boot replaces another

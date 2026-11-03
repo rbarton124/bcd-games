@@ -3283,6 +3283,7 @@ static void wine_session_end(void)
     unsetenv("DXMT_ENABLE_NVEXT"); unsetenv("DXMT_WSI_MONITOR_IDENTITY"); unsetenv("DXMT_WSI_MODE_TABLE");
     unsetenv("BCD_SERVICES_DIR"); unsetenv("BCD_SERVICES_TARGET");   /* round 620 */
     unsetenv("BCD_SESSION_HZ");   /* round 626 (agent H S2): the next launch publishes its own */
+    unsetenv("BCD_GAME_FOLDER");  /* madeira-bcd pool-fg: the next launch publishes its own game's folder, or none */
     /* madeira-bcd: Horizon Zero Dawn's per-game switches must not reach a later game
      * of this app run (GTA V Enhanced runs without them). */
     unsetenv("MADEIRA_UCRT_X64_MATH"); unsetenv("MADEIRA_SRV_FGETPATH");
