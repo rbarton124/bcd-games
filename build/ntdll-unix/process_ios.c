@@ -1827,6 +1827,95 @@ static int sc_browser_cmdline( const WCHAR *cl, int cl_len, int jitless, const c
     out[o] = 0;
     return o;
 }
+
+/* madeira-bcd: Ubisoft Connect's Chromium (on unless env.MADEIRA_UBI_CEF = 0), like Steam's and Social Club's models.
+ *
+ * upc.exe is CEF 135's BROWSER process (32-bit libcef.dll, no --type=); it starts UplayWebCore.exe --type=gpu-process,
+ * --type=utility (NetworkService, StorageService, the component Unzipper, ProcessorMetrics) and --type=renderer
+ * children, one per browser view. Every 32-bit process needs a 4 GB guest window and the session has seven (eight with
+ * env.MADEIRA_WOW_PLACEHOLDERS = 1), so unlike Steam's webhelper, Social Club's helper and the EA app, which run
+ * --single-process, this browser keeps its helpers (a refused helper makes Chromium abort: "GPU process isn't usable";
+ * --single-process stops in a fatal mojo CHECK in this CEF) and only gets Chromium's process-count switches:
+ *   --in-process-gpu                  no GPU process (also none for the DX12/Vulkan info collection)
+ *   --disable-site-isolation-trials   with --renderer-process-limit=1: one renderer process for every view
+ *   --renderer-process-limit=1
+ *   --js-flags=--jitless              V8 without JIT (unless MADEIRA_JITLESS=0); the browser passes it to its renderers
+ *   --disable-component-update        no Unzipper utility retried every second
+ * A switch the command line already carries is left as it is (the caller's wins). Ubisoft's libcef.dll drops the
+ * browser's whole command line when its cef_settings_t.command_line_args_disabled is set; virtual_ios.c
+ * ios_ubi_cef_patch keeps it (virtual_ios.c, for the libcef.dll builds it knows).
+ * A command line with a bare "--" is not touched (Chromium stops reading switches there). */
+enum { UBI_NOT_CEF = 0, UBI_BROWSER = 1, UBI_HELPER = 2 };
+enum { UBI_IN_PROCESS_GPU = 1, UBI_SITE_ISOLATION = 2, UBI_RENDERER_LIMIT = 4, UBI_NO_COMPONENT_UPDATE = 8,
+       UBI_JITLESS_ADDED = 16, UBI_OWN_JS_FLAGS = 32, UBI_JITLESS_MERGED = 64, UBI_EXTRA_ADDED = 128 };
+
+/* upc.exe without --type= is the browser (also `upc.exe ... -upc_game_starter`, a full CEF browser of its own);
+ * UplayWebCore.exe, or upc.exe with --type=, is a helper, left alone. */
+static int ubi_cef_kind( const WCHAR *image, int image_len, const WCHAR *cl, int cl_len )
+{
+    if (ios_image_name_is( image, image_len, "uplaywebcore.exe" )) return UBI_HELPER;
+    if (!ios_image_name_is( image, image_len, "upc.exe" )) return UBI_NOT_CEF;
+    return sc_switch_end( cl, cl_len, "--type=" ) >= 0 ? UBI_HELPER : UBI_BROWSER;
+}
+
+/* The browser's new command line, written to `out` (`cap` WCHARs with the NUL): `cl` with each missing switch of the
+ * list above appended, then ` extra` when non-empty. --js-flags= handling as in sc_browser_cmdline (a --js-flags= of the
+ * command line is kept; one in `extra` gets --jitless as its first flag). Returns the length and the UBI_* bits in
+ * *how, -1 when `cap` is too small, -2 when `cl` has a bare "--". */
+static int ubi_cef_cmdline( const WCHAR *cl, int cl_len, int jitless, const char *extra, WCHAR *out, int cap, int *how )
+{
+    static const struct { const char *sw, *add; int bit; } list[] = {
+        { "--in-process-gpu",               " --in-process-gpu",               UBI_IN_PROCESS_GPU },
+        { "--disable-site-isolation-trials", " --disable-site-isolation-trials", UBI_SITE_ISOLATION },
+        { "--renderer-process-limit=",      " --renderer-process-limit=1",     UBI_RENDERER_LIMIT },
+        { "--disable-component-update",     " --disable-component-update",     UBI_NO_COMPONENT_UPDATE },
+    };
+    int need = cl_len + 1 + 140 + 24 + (extra ? 1 + (int)strlen( extra ) : 0);
+    int xj = (jitless && extra) ? sc_extra_js_flags( extra ) : -1;
+    int o = 0, k, i;
+    const char *add;
+
+    *how = 0;
+    if (cl_len < 0) return -1;
+    if (sc_switch_end( cl, cl_len, "--" ) >= 0) return -2;
+    if (cap < need) return -1;
+    for (k = 0; k < cl_len; k++) out[o++] = cl[k];
+    for (i = 0; i < (int)(sizeof(list) / sizeof(list[0])); i++)
+    {
+        if (sc_switch_end( cl, cl_len, list[i].sw ) >= 0) continue;
+        for (add = list[i].add; *add; add++) out[o++] = (WCHAR)*add;
+        *how |= list[i].bit;
+    }
+    if (sc_switch_end( cl, cl_len, "--js-flags=" ) >= 0) *how |= UBI_OWN_JS_FLAGS;
+    else if (jitless && xj < 0)
+    {
+        for (add = " --js-flags=--jitless"; *add; add++) out[o++] = (WCHAR)*add;
+        *how |= UBI_JITLESS_ADDED;
+    }
+    if (extra && *extra)
+    {
+        out[o++] = ' ';
+        for (k = 0; extra[k]; k++)
+        {
+            if (k == xj)   /* --jitless first in extra's last --js-flags= (see sc_browser_cmdline) */
+            {
+                int quoted = extra[k] == '"';
+                for (add = quoted ? "\"--jitless " : "--jitless\" \""; *add; add++) out[o++] = (WCHAR)*add;
+                *how |= UBI_JITLESS_MERGED;
+                if (quoted) continue;
+            }
+            out[o++] = (WCHAR)(unsigned char)extra[k];
+        }
+        if (xj == k)
+        {
+            for (add = "--jitless"; *add; add++) out[o++] = (WCHAR)*add;
+            *how |= UBI_JITLESS_MERGED;
+        }
+        *how |= UBI_EXTRA_ADDED;
+    }
+    out[o] = 0;
+    return o;
+}
 #endif
 
 /**********************************************************************
@@ -2444,6 +2533,59 @@ NTSTATUS WINAPI NtCreateUserProcess( HANDLE *process_handle_ptr, HANDLE *thread_
                 params->CommandLine.Length = (cl_len + 1 + n) * sizeof(WCHAR);
                 params->CommandLine.MaximumLength = params->CommandLine.Length + sizeof(WCHAR);
                 dprintf( 2, "[child-args] env.MADEIRA_CHILD_ARGS: appended \"%s\" to the command line\n", extra );
+            }
+        }
+    }
+
+    /* madeira-bcd: Ubisoft Connect's Chromium -- see ubi_cef_kind. env.MADEIRA_UBI_CEF = 0 turns it off. */
+    {
+        const char *ubi = getenv( "MADEIRA_UBI_CEF" );
+        int kind = !(ubi && ubi[0] == '0' && !ubi[1])
+                 ? ubi_cef_kind( params->ImagePathName.Buffer, params->ImagePathName.Length / sizeof(WCHAR),
+                                 params->CommandLine.Buffer, params->CommandLine.Length / sizeof(WCHAR) )
+                 : UBI_NOT_CEF;
+        if (kind == UBI_BROWSER)
+        {
+            const char *jl = getenv( "MADEIRA_JITLESS" );
+            const char *extra = getenv( "MADEIRA_UBI_CEF_FLAGS" );
+            int cl_len = params->CommandLine.Length / sizeof(WCHAR), how = 0, o = -1;
+            int cap = cl_len + 200 + (extra ? (int)strlen( extra ) : 0);
+            WCHAR *nbuf = malloc( cap * sizeof(WCHAR) );   /* leaks once per launch, as above */
+
+            if (nbuf)
+                o = ubi_cef_cmdline( params->CommandLine.Buffer, cl_len, !(jl && jl[0] == '0'), extra, nbuf, cap, &how );
+            if (o >= 0)
+            {
+                char tail[136];
+                int tstart = o > 128 ? o - 128 : 0, ti;
+
+                params->CommandLine.Buffer = nbuf;
+                params->CommandLine.Length = o * sizeof(WCHAR);
+                params->CommandLine.MaximumLength = params->CommandLine.Length + sizeof(WCHAR);
+                for (ti = 0; ti + tstart < o && ti < 135; ti++)
+                {
+                    WCHAR c = nbuf[tstart + ti];
+                    tail[ti] = (c >= 0x20 && c < 0x7f) ? (char)c : '?';
+                }
+                tail[ti] = 0;
+                dprintf( 2, "[ubi-cef] upc.exe browser: appended%s%s%s%s; V8 %s; MADEIRA_UBI_CEF_FLAGS %s "
+                            "(a switch the command line had stays as it was; its helpers are not refused)\n",
+                         (how & UBI_IN_PROCESS_GPU) ? " --in-process-gpu" : "",
+                         (how & UBI_SITE_ISOLATION) ? " --disable-site-isolation-trials" : "",
+                         (how & UBI_RENDERER_LIMIT) ? " --renderer-process-limit=1" : "",
+                         (how & UBI_NO_COMPONENT_UPDATE) ? " --disable-component-update" : "",
+                         (how & UBI_JITLESS_ADDED) ? "--jitless (MADEIRA_JITLESS=0 turns it off)"
+                         : (how & UBI_JITLESS_MERGED) ? "--jitless put first in MADEIRA_UBI_CEF_FLAGS' --js-flags"
+                         : (how & UBI_OWN_JS_FLAGS) ? "flags left as the command line has them" : "JIT (MADEIRA_JITLESS=0)",
+                         (how & UBI_EXTRA_ADDED) ? "appended" : "unset" );
+                dprintf( 2, "[ubi-cef] cmdline-tail: ...%s\n", tail );
+            }
+            else
+            {
+                const char *why = (nbuf && o == -2) ? "it has a bare --" : "no memory or room";
+
+                free( nbuf );
+                dprintf( 2, "[ubi-cef] upc.exe browser: command line NOT rewritten (%s) -- it runs with Chromium's defaults\n", why );
             }
         }
     }
