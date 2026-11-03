@@ -162,7 +162,8 @@ static int mprotect_exec( void *base, size_t size, int prot )
 {
     n_mprotect++;
     if ((prot & PROT_WRITE) && alias_rw && (char *)base <= G + 8 * HPG && (char *)base + size > G + 8 * HPG) n_mprotect_alias_w++;
-    return mprotect( base, size, prot );
+    /* the pages here are only read and written, never run; an Apple Silicon host refuses write + execute on ordinary memory */
+    return mprotect( base, size, prot & ~PROT_EXEC );
 }
 static void server_enter_uninterrupted_section( pthread_mutex_t *m, sigset_t *s ) { (void)s; pthread_mutex_lock( m ); depth++; }
 static void server_leave_uninterrupted_section( pthread_mutex_t *m, sigset_t *s ) { (void)s; depth--; pthread_mutex_unlock( m ); }
@@ -226,7 +227,7 @@ static void reset( void )
     ios_self_write_grant.begin = ios_self_write_grant.end = 0;
 }
 
-static unsigned char data[5 * PG] __attribute__((aligned(4096)));
+static unsigned char data[2 * HPG] __attribute__((aligned(HPG)));   /* host-page aligned: mprotect takes whole host pages */
 
 static void test_pages( void )
 {
@@ -275,10 +276,10 @@ static void test_pages( void )
 
     /* source: unreadable is the server's case, partly unreadable a partial copy */
     reset(); layout( 0, 8, RW );
-    mprotect( data + 2 * PG, PG, PROT_NONE );
-    T( sw( P(0), data + 2 * PG, 8, NULL ) == 0 );
-    T( sw( P(0) + 0x800, data + PG + 0x800, 0x1000, NULL ) == 0x800 && !memcmp( P(0) + 0x800, data + PG + 0x800, 0x800 ) );
-    mprotect( data + 2 * PG, PG, PROT_READ | PROT_WRITE );
+    mprotect( data + HPG, HPG, PROT_NONE );
+    T( sw( P(0), data + HPG, 8, NULL ) == 0 );
+    T( sw( P(0) + 0x800, data + HPG - 0x800, 0x1000, NULL ) == 0x800 && !memcmp( P(0) + 0x800, data + HPG - 0x800, 0x800 ) );
+    mprotect( data + HPG, HPG, PROT_READ | PROT_WRITE );
 
     /* overlap inside one page: the staged source gives memmove's result */
     reset(); layout( 0, 4, RW );

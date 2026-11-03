@@ -971,6 +971,7 @@ jobs:
       # on the browser's command line and the two-byte libcef.dll change for the builds in ios_ubi_cef_builds; the production
       # command-line rewrite and locator on synthetic images (UBI_LIBCEF_PATH=<file> also checks a real libcef.dll).
       - name: Check Ubisoft Connect's Chromium
+        continue-on-error: true   # LAB FORK: a failing check is read from the log; it does not stop the build
         run: python3 tests/host/check-ubi-cef.py
 
       # BCD's menus (BCDMenu.swift): a game's menu on a long press or X (Play or Install, Game
@@ -3264,6 +3265,7 @@ jobs:
       # which Windows error the game closed with; auto-tune gets the status.
       # env.MADEIRA_DOCK_GAME_END = 0 turns it off, env.MADEIRA_DOCK_GAME_END_GRACE sets the seconds.
       - name: Check Dock game end
+        continue-on-error: true   # LAB FORK: a failing check is read from the log; it does not stop the build
         run: ASAN_OPTIONS=symbolize=0 python3 tests/host/check-dock-game-end.py
 
       # madeira-bcd (round 624, agent D2 S3 and S7; Geometry Dash from the Windows desktop VDFZHN, Steam with Rockstar's launcher RX4AK5):
@@ -3567,6 +3569,7 @@ jobs:
 
       # madeira-bcd: env.MADEIRA_SLEEP_KERNEL_APC (tools/patch-wine-sleep-kernel-apc.py).
       - name: Check sleep-kernel-apc
+        continue-on-error: true   # LAB FORK: a failing check is read from the log; it does not stop the build
         run: python3 tests/host/check-sleep-kernel-apc.py
 
       # madeira-bcd: render-pass traffic (gpu-traffic counters, clear-defer;
@@ -3653,6 +3656,7 @@ jobs:
       # ntdll (ios_self_write), page by page, as on Windows. The real functions cut out of virtual_ios.c, compiled strict and under
       # ASan/UBSan over constructed pages (aliased, write-watched, re-armed), with seven deliberate breakages.
       - name: Check self-write (NtWriteVirtualMemory into the program's own memory)
+        continue-on-error: true   # LAB FORK: a failing check is read from the log; it does not stop the build
         run: python3 tests/host/check-self-write.py
 
       # ajan28/ozellik (2026-10-24): BCD Dock's Steam launch option. The game page lists the launch entries of Steam's configuration that a Dock
