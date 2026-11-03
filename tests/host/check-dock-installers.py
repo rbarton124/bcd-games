@@ -727,10 +727,10 @@ func pe(_ url: URL, machine: UInt16) throws {
         require(anyCase && !noProgram && !otherInstaller && !longerName,
                 "a shared launcher's installer, by file name and any case, and only when one of its programs exists")
         // No launcher in the prefix: the installer runs as before.
-        let ubiFirst = try ubiGame(7020, "Ubi")
+        let ubiFirst = try ubiGame(7050, "Ubi")
         DockInstallers.prepare(ubiFirst, drive: drive, prefix: prefix, has32Bit: true, hasMsiexec: true, hasWineMono: true, fusionSource: nil)
         let ubiBatch0 = (try? String(contentsOf: drive.appendingPathComponent("bcd-dock-installers.cmd"), encoding: .utf8)) ?? ""
-        require(ubiBatch0.contains("UbisoftConnectInstaller.exe") && ubiBatch0.contains("vc.exe") && !logged("app=7020 program=ubisoft connect pc client skipped"),
+        require(ubiBatch0.contains("UbisoftConnectInstaller.exe") && ubiBatch0.contains("vc.exe") && !logged("app=7050 program=ubisoft connect pc client skipped"),
                 "no launcher in the prefix: the batch runs the installer")
         try FileManager.default.createDirectory(at: ubiFolder.appendingPathComponent("upc.exe"), withIntermediateDirectories: true)
         require(!DockInstallers.isFile("C:\\Program Files (x86)\\Ubisoft\\Ubisoft Game Launcher\\upc.exe", drive: drive), "a folder named upc.exe is no launcher")
@@ -742,7 +742,7 @@ func pe(_ url: URL, machine: UInt16) throws {
         require(DockInstallScripts.installsPresentLauncher("C:\\g\\UbisoftConnectInstaller.exe", exists: { DockInstallers.isFile($0, drive: drive) }),
                 "upc.exe in the launcher's folder, any case of its name, says the launcher is installed")
         // The launcher is there now (a Dock game's run, or the player's own install): another game's run of the same installer is provided.
-        let ubiSecond = try ubiGame(7021, "Ubi2")
+        let ubiSecond = try ubiGame(7051, "Ubi2")
         DockInstallers.prepare(ubiSecond, drive: drive, prefix: prefix, has32Bit: true, hasMsiexec: true, hasWineMono: true, fusionSource: nil)
         let ubiBatch = (try? String(contentsOf: drive.appendingPathComponent("bcd-dock-installers.cmd"), encoding: .utf8)) ?? ""
         let ubiSystem = (try? String(contentsOf: prefix.appendingPathComponent("system.reg"), encoding: .utf8)) ?? ""
@@ -752,7 +752,7 @@ func pe(_ url: URL, machine: UInt16) throws {
         require(DockInstallScripts.provider(ubiFound[0]) == DockInstallScripts.launcherProvider
                 && DockInstallScripts.marked(ubiFound[0].run, in: ubiSystem) && !DockInstallScripts.marked(ubiFound[1].run, in: ubiSystem),
                 "prepare: the launcher's installer is recorded as done for this game under Valve's per-app key, the other program is not")
-        require(logged("app=7021 program=ubisoft connect pc client skipped: the launcher it installs is already in the prefix") && logged("record: yes, ")
+        require(logged("app=7051 program=ubisoft connect pc client skipped: the launcher it installs is already in the prefix") && logged("record: yes, ")
                 && (DockInstallers.note ?? "").contains("Provided by the installed launcher, not run: ubisoft connect pc client"),
                 "prepare: the log and the sheet's note say it was skipped because the launcher is already there")
         let ubiBefore = LogStore.shared.lines.count
