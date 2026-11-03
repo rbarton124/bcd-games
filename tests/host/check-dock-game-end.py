@@ -227,6 +227,27 @@ let conhost = ended("C:\\windows\\system32\\conhost.exe", 0, ago: 7)
         require(R.isResidentLauncher("C:\\Program Files (x86)\\Rockstar Games\\Social Club\\SocialClubHelper.exe")
                 && !R.isResidentLauncher(rdr2) && !R.isResidentLauncher(cuphead),
                 "the resident launcher is Rockstar's folder only")
+        // ---- madeira-bcd: Ubisoft Connect's client is resident after Close too, but a game the client installed below it is a game
+        let fc3 = "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Far Cry 3\\bin\\farcry3_d3d11.exe"
+        let uFolder = "C:\\Program Files (x86)\\Ubisoft\\Ubisoft Game Launcher\\"
+        require(verdictAsked([dockhost, ended(fc3, 0, ago: 6, lived: 900), runs(uFolder + "upc.exe"), runs(uFolder + "UplayService.exe"),
+                              runs(uFolder + "UplayWebCore.exe"), runs(uFolder + "UplayWebCore.exe"), runs(uFolder + "UbisoftGameLauncher.exe")])
+                    == .end(status: 0, file: "farcry3_d3d11.exe", lived: 900),
+                "Close, Far Cry 3 ended 0, the host finished, only Ubisoft Connect's client runs: end with the game's status")
+        require(verdict([dockhost, ended(fc3, 0, ago: 60), runs(uFolder + "upc.exe")]) == .none,
+                "without the Close the client still counts (today's behaviour)")
+        require(verdictAsked([dockhost, ended(fc3, 0, ago: 6, lived: 900), runs(uFolder + "upc.exe"), runs(uFolder + "games\\Far Cry 3\\bin\\farcry3.exe")])
+                    == .wait(status: 0, file: "farcry3_d3d11.exe", why: "game-still-runs"),
+                "a game below the client's folder that still runs keeps the session open")
+        require(verdictAsked([dockhost, ended(fc3, 0, ago: 6, lived: 900), runs(uFolder + "shareplay\\SharePlayClient.exe")])
+                    == .wait(status: 0, file: "farcry3_d3d11.exe", why: "game-still-runs"),
+                "a program in a folder below the client's own is not taken for the client")
+        require(R.isResidentLauncher(uFolder + "upc.exe") && R.isResidentLauncher("C:\\Program Files\\Ubisoft\\Ubisoft Game Launcher\\UPLAYWEBCORE.EXE")
+                && R.isResidentLauncher("c:/program files (x86)/ubisoft/ubisoft game launcher/UbisoftConnect.exe")
+                && !R.isResidentLauncher(uFolder + "games\\Far Cry 3\\bin\\farcry3.exe") && !R.isResidentLauncher(uFolder + "shareplay\\SharePlayClient.exe")
+                && !R.isResidentLauncher("C:\\Program Files (x86)\\Ubisoft\\Ubisoft Game Launcher2\\upc.exe") && !R.isResidentLauncher("C:\\Program Files (x86)\\Ubisoft\\upc.exe")
+                && !R.isResidentLauncher(fc3),
+                "the resident client is the programs directly in Ubisoft Game Launcher's folder, any case, either slash; nothing below it, no look-alike folder, no game")
         require(verdictAsked([dockhost, ended(cuphead, 0, ago: 60)], host: DockHostState(gameRan: true, gameOver: true, finished: false))
                 == .wait(status: 0, file: "cuphead.exe", why: "host-not-finished"), "the host has not finished: wait")
         require(verdictAsked([dockhost, ended(cuphead, 0, ago: 60)], host: DockHostState(gameRan: false, gameOver: false, finished: false))
@@ -724,6 +745,11 @@ require('/* DockGameEnd.swift in Sources */,' in project and 'path = DockGameEnd
         'DockGameEnd.swift is built by the Xcode project (build file, file reference, group and sources entries)')
 code = '\n'.join(l for l in rules_src.splitlines() if not l.strip().startswith('//'))
 require(re.search(r'\bView\b|SwiftUI|MadeiraConfig|MadeiraDock\b|LogStore|getenv|madeira_|wine_', code) is None, 'the rules are Foundation-only and pure (the engine\'s and the report\'s answers are passed in)')
+resident = block(rules_src, 'static func isResidentLauncher(_ image: String) -> Bool')
+require('"c:\\\\program files (x86)\\\\ubisoft\\\\ubisoft game launcher\\\\"' in resident and '"c:\\\\program files\\\\ubisoft\\\\ubisoft game launcher\\\\"' in resident
+        and 'return !p.dropFirst(folder.count).contains("\\\\")' in resident
+        and rules_src.count('isResidentLauncher(') == 2 and 'if anyStatus, isResidentLauncher(p.path) { break }' in rules_src,
+        'Ubisoft Connect\'s client is resident only directly in its own folder, and only after the player\'s Close (the one place isResidentLauncher is asked)')
 additions = '\n'.join([process[process.index('static void ios_child_path_text('):process.index('static int ios_child_slot_take(')],
                        block(process, 'int ios_child_slot_note_exit( void *peb, int status )'),
                        block(process, 'int madeira_child_report( char *buf, int len )')])
