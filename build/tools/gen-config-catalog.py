@@ -152,6 +152,25 @@ OVERLAY = {
                         "pool: reusable 3 seconds later, once no thread runs in them. Before, they stayed in use "
                         "until Madeira closed, and a game started after many such exits got 16 MB code buffers and "
                         "ran slowly. 0 keeps them in use, as before."},
+    "env.MADEIRA_POOL_CODE_FOREGROUND": {"category": "Memory & JIT pool", "title": "Larger code buffers for the program you launched",
+                "kind": "bool", "default": "1",
+                "note": "On by default. Every program of the session other than the one you launched (a launcher, its "
+                        "helpers, Steam's client) gets FEX code buffers of up to 32 MB; the program you launched (the "
+                        "programs in its folder; for a Steam game, its install folder) keeps what the pool can afford, as "
+                        "before. Without it the programs that start first take what is free, and a game that starts last, "
+                        "behind a launcher, is held to 16 MB buffers and runs slowly. A game with no other programs sees no "
+                        "change. 0 turns it off. A \"[pool-fg]\" line says what each program got."},
+    # madeira-bcd: NtWriteVirtualMemory of a 32-bit program into its own window (ios_self_write, build/ntdll-unix/virtual_ios.c).
+    "env.MADEIRA_SELF_WRITE": {"category": "Memory & JIT pool", "title": "A 32-bit program writes its own memory",
+                "kind": "bool", "default": "1",
+                "note": "On by default. A 32-bit program's WriteProcessMemory into itself is done in BCD, page by page, "
+                        "as on Windows: a page the program has made writable is written, and the write stops at any "
+                        "other page. A code page the emulator protected again right after the program's own "
+                        "VirtualProtect is written once and its protection put back. Before, every such write failed "
+                        "with access denied (BCD's server cannot write a program's memory), and Ubisoft Connect's "
+                        "launcher, which hooks its own system DLLs this way, ended with 0xdeadc0de. Writes into "
+                        "another program and 64-bit programs are unchanged. 0 sends every write to the server, as "
+                        "before. Log lines start [self-write]. Read once per session."},
     # madeira-bcd (round 624, Steam 113): two Dock experiments (tools/patch-dock-steam-readback.py; the Dock host reads them).
     "env.MADEIRA_DOCK_PUMP_MS": {"category": "Steam & Dock", "title": "Dock: a shorter wait loop while the game starts",
                 "kind": "text", "default": "", "sources": ["tools/patch-dock-steam-readback.py"],

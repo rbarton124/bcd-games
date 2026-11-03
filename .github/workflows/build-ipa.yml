@@ -3394,6 +3394,12 @@ jobs:
       - name: Check the PAGE_WRITECOPY old protection (V8 flag freeze)
         run: python3 tests/host/check-wc-old-prot.py
 
+      # madeira-bcd: env.MADEIRA_SELF_WRITE (on unless 0): a 32-bit program's NtWriteVirtualMemory into its own window is done in
+      # ntdll (ios_self_write), page by page, as on Windows. The real functions cut out of virtual_ios.c, compiled strict and under
+      # ASan/UBSan over constructed pages (aliased, write-watched, re-armed), with seven deliberate breakages.
+      - name: Check self-write (NtWriteVirtualMemory into the program's own memory)
+        run: python3 tests/host/check-self-write.py
+
       # ajan28/ozellik (2026-10-24): BCD Dock's Steam launch option. The game page lists the launch entries of Steam's configuration that a Dock
       # start can run and remembers the pick (LibraryEntry.steamLaunchOption); a game that never picked asks Valve's client for exactly the entry and
       # logs the line it did before (SteamDirectStart.dockLaunch against a verbatim copy of the old two lines). Fallout 4's configuration is one entry.
