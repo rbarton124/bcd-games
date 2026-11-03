@@ -19,7 +19,8 @@ concurrency:
 jobs:
   build:
     # madeira-bcd: runs only in the owner's repository; a fork's run is skipped.
-    if: github.repository == 'thebcd69/madeira-bcd'
+    # LAB FORK: this fork's own runs build too.
+    if: github.repository == 'thebcd69/madeira-bcd' || github.repository == 'rbarton124/bcd-games'
     runs-on: macos-15
     # contents: write only so the token can see DRAFT releases, which is where
     # the Metal Shader Converter installer is kept (drafts are not public).
@@ -2471,6 +2472,23 @@ jobs:
       # (Apple's agreement, app/Madeira/d3d12/NOTICE.txt); build/madeira-d3d12/deps.sh
       # checks both against their pinned hashes. A missing or mismatched converter
       # would build the stub that draws nothing in any D3D12 game, so fail instead.
+      # LAB FORK: Apple's agreement keeps the iOS converter library out of public repositories, so this public fork
+      # fetches it at build time from the private lab repository (the copy inside the signed BCD 0.1.625 IPA; this
+      # fork's build/madeira-d3d12/deps.sh pins that copy's hash). LAB_TOKEN: a fine-grained token with Contents
+      # read/write on that one repository. Nothing fetched here is uploaded anywhere.
+      - name: Fetch the converter library (lab fork)
+        if: github.repository == 'rbarton124/bcd-games'
+        shell: bash
+        env:
+          LAB_TOKEN: ${{ secrets.LAB_TOKEN }}
+        run: |
+          if [ -z "$LAB_TOKEN" ]; then echo "::error::the LAB_TOKEN secret is not set (Settings > Secrets and variables > Actions)"; exit 1; fi
+          curl -fsSL --retry 3 -H "Authorization: Bearer $LAB_TOKEN" -H "Accept: application/vnd.github.raw" \
+            -o app/Madeira/d3d12/libmetalirconverter.dylib \
+            "https://api.github.com/repos/rbarton124/bcd-ubisoft-lab/contents/build-inputs/libmetalirconverter.dylib?ref=claude/stoic-turing-7euopb"
+          ls -la app/Madeira/d3d12/libmetalirconverter.dylib
+          shasum -a 256 app/Madeira/d3d12/libmetalirconverter.dylib
+
       - name: Locate Metal Shader Converter headers
         shell: bash
         run: |
@@ -4731,12 +4749,30 @@ jobs:
       - name: Package Madeira and Madeira2 unsigned IPAs
         run: python3 tools/ota-variants.py package build-out/Madeira.xcarchive/Products/Applications/Madeira.app build-out ${{ steps.bn.outputs.n }}
 
+      # LAB FORK: this repository is public, so no IPA artifact here (the owner's rule, below, holds for the same
+      # reason): the unsigned IPAs go to a pre-release of the private lab repository. Sign as an update, as before.
+      - name: Upload the unsigned IPAs to the private lab repository (lab fork)
+        if: github.repository == 'rbarton124/bcd-games'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.LAB_TOKEN }}
+        run: |
+          n=${{ steps.bn.outputs.n }}
+          tag="bcd-build-$n-${GITHUB_SHA::7}-run${{ github.run_number }}"
+          shasum -a 256 build-out/*.ipa
+          gh release create "$tag" --repo rbarton124/bcd-ubisoft-lab --prerelease --target claude/stoic-turing-7euopb \
+            --title "BCD build $n from $GITHUB_REF_NAME (${GITHUB_SHA::7})" \
+            --notes "Unsigned build of $GITHUB_REPOSITORY@$GITHUB_SHA (branch $GITHUB_REF_NAME), Actions run ${{ github.run_id }}. Sign it as an update to keep the app's data." \
+            build-out/Madeira-0.1.$n-unsigned.ipa build-out/Madeira2-0.1.$n-unsigned.ipa
+
       # Over-the-air install: sign with the owner's certificate (kept in the
       # owner's PRIVATE bucket, never in the repository) and put both signed IPAs
       # plus installation pages (7-day pre-signed links) in the same bucket.
       # A signing/upload failure is caught by the private-bucket gate below.
+      # LAB FORK: the owner's repository only.
       - name: Sign for OTA install (private bucket)
         id: ota
+        if: github.repository == 'thebcd69/madeira-bcd'
         continue-on-error: true
         env:
           B2_KEY_ID: ${{ secrets.B2_KEY_ID }}
@@ -4759,7 +4795,7 @@ jobs:
       # private R2 bucket (the OTA step above). If that step did not succeed,
       # the build fails here instead of keeping the IPA somewhere public.
       - name: Check the IPA reached the private bucket
-        if: steps.ota.outcome != 'success'
+        if: github.repository == 'thebcd69/madeira-bcd' && steps.ota.outcome != 'success'
         run: |
           echo "::error::OTA signing/upload did not succeed: this build's IPA was not kept anywhere (no GitHub artifact by design)"
           exit 1
