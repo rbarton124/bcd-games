@@ -13,7 +13,7 @@ its switch, its protect record and log line, NtWriteVirtualMemory, and the Wine 
 get_unix_prot, check_write_access, mprotect_range, update_write_watches, ios_jit_anon_alias_find_cover
 and _lookup) and compiling them with -Wall -Wextra -Werror, then under AddressSanitizer and
 UndefinedBehaviorSanitizer, over constructed memory with 4 KB pages in 16 KB host pages: mprotect for the
-host protection, a memfd mapped twice for a page aliased to the JIT pool (read-only at the guest address,
+host protection, a temporary file mapped twice for a page aliased to the JIT pool (read-only at the guest address,
 read/write in the pool), and a pipe standing in for mach_vm_write / mach_vm_read_overwrite (a page that
 cannot be written or read is an error code, not a fault):
   - a writable page is written directly; a page Wine records read-only, no-access, guard or uncommitted is
@@ -395,7 +395,10 @@ static void test_off( void )   /* env.MADEIRA_SELF_WRITE = 0 */
 int main( int argc, char **argv )
 {
     pthread_mutexattr_t attr;
-    int fd = memfd_create( "pool", 0 );
+    char pool_path[] = "/tmp/check-self-write-pool-XXXXXX";   /* a file mapped twice (memfd is Linux only) */
+    int fd = mkstemp( pool_path );
+
+    if (fd >= 0) unlink( pool_path );
 
     if (argc > 1 && !strcmp( argv[1], "switch" ))   /* read in a fresh process */
     {

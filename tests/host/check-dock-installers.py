@@ -720,11 +720,11 @@ func pe(_ url: URL, machine: UInt16) throws {
             return g
         }
         let ubiFolder = drive.appendingPathComponent("Program Files (x86)/Ubisoft/Ubisoft Game Launcher")
-        let none: (String) -> Bool = { _ in false }, all: (String) -> Bool = { _ in true }
-        require(DockInstallScripts.installsPresentLauncher("C:\\g\\Support\\Ubisoft\\UbisoftConnectInstaller.EXE", exists: all)
-                && !DockInstallScripts.installsPresentLauncher("C:\\g\\Support\\Ubisoft\\UbisoftConnectInstaller.exe", exists: none)
-                && !DockInstallScripts.installsPresentLauncher("C:\\g\\Setup\\vc.exe", exists: all)
-                && !DockInstallScripts.installsPresentLauncher("C:\\g\\xubisoftconnectinstaller.exe", exists: all),
+        let anyCase = DockInstallScripts.installsPresentLauncher("C:\\g\\Support\\Ubisoft\\UbisoftConnectInstaller.EXE", exists: { _ in true })
+        let noProgram = DockInstallScripts.installsPresentLauncher("C:\\g\\Support\\Ubisoft\\UbisoftConnectInstaller.exe", exists: { _ in false })
+        let otherInstaller = DockInstallScripts.installsPresentLauncher("C:\\g\\Setup\\vc.exe", exists: { _ in true })
+        let longerName = DockInstallScripts.installsPresentLauncher("C:\\g\\xubisoftconnectinstaller.exe", exists: { _ in true })
+        require(anyCase && !noProgram && !otherInstaller && !longerName,
                 "a shared launcher's installer, by file name and any case, and only when one of its programs exists")
         // No launcher in the prefix: the installer runs as before.
         let ubiFirst = try ubiGame(7020, "Ubi")
