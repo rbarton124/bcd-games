@@ -4183,7 +4183,7 @@
     {
       "id": "far-cry-3",
       "title": "Far Cry 3",
-      "version": 2,
+      "version": 3,
       "match": {
         "steamAppIDs": [220240],
         "steamFolders": ["far cry 3"],
@@ -4196,7 +4196,9 @@
         "# Reset to Recommended, at the bottom of the game's settings, brings them back.",
         "env.MADEIRA_EC_HOOK_TRACE = 0",
         {"line": "env.MADEIRA_DOCK_SCRIPT_REGISTRY = 1", "minBuild": 591},
-        {"line": "env.MADEIRA_REG_TRACE = 1", "minBuild": 624}
+        {"line": "env.MADEIRA_REG_TRACE = 1", "minBuild": 624},
+        {"line": "dxmt = dxgi.customVendorId=1002;dxgi.customDeviceId=7340", "minBuild": 577},
+        "pool-split = 1"
       ],
       "notes": [
         "Far Cry 3 (Steam 220240, BCD Dock), round 620, iPad17,3, build 614 (Send Logs 2H38A0 = 65GSHJ, 7VRX47 = WMGAZ8, X9ZXFB):",
@@ -4209,7 +4211,17 @@
         "entries were left out as language sections without English text and their layout is not known; the keys the updater reads are not known",
         "either. Build 623 logs which script values are present and the shape of the entries it left out. Not solved.",
         "Version 2 (round 624, 0AME71, 8N7HRS, A7587D: the same box on builds 622-623): env.MADEIRA_REG_TRACE = 1 (build 624, log only) prints",
-        "every registry request that fails as [reg-miss] lines, so the next log names the key the updater looks for."
+        "every registry request that fails as [reg-miss] lines, so the next log names the key the updater looks for.",
+        "Version 3: dxmt = dxgi.customVendorId=1002;dxgi.customDeviceId=7340 shows the game's Direct3D 11 renderer (farcry3_d3d11.exe) an AMD",
+        "adapter through DXMT's DXGI (the id pair as 4 hex digits each). Without it BCD reports Apple (106B) and the game draws hard-edged darker",
+        "rectangles over the 3D scene (not the HUD). Far Cry 3 and 4 are known to assume a vendor-dependent result for a clear of 0.5 on a UNORM",
+        "target (DXVK issue 3758). Tested on one iPhone18,2, build 625, a Steam copy",
+        "through BCD Dock, four sessions with the line (the log prints \"Found config env: dxgi.customVendorId=1002;dxgi.customDeviceId=7340\"),",
+        "rectangles gone in every one; set the game's Overall Quality to Custom first, its Optimal preset reads the detected GPU. Only DXGI changes:",
+        "the Direct3D 9 adapter (d3d9.custom*) and Windows' own adapter keep reporting Apple. gpu-card = amd would change all three and the",
+        "video memory Windows reports; not tried on a device. pool-split = 1: the session's JIT pool gets its second region (about 880 MB",
+        "instead of 544-624): Ubisoft Connect's processes and the game need more than one region holds (every session of the same",
+        "device with a pool under 650 MB ran out; the split sessions peaked at 96-98 %)."
       ]
     },
     {
