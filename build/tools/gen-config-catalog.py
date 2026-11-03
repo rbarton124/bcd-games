@@ -697,6 +697,13 @@ OVERLAY = {
                 "note": "Default off. 1: a reservation that names its own address (or a hint) and overlaps the emulator's arena is refused with STATUS_CONFLICTING_ADDRESSES, so the "
                         "program places it elsewhere, and the steering valve skips its top slot while the arena lies in it (Red Dead Redemption 2: the emulator ran out of room when Social Club's "
                         "browser took part of its arena). Set it in the game's own file; read at session start."},
+    "env.MADEIRA_KILL_REAP": {"category": "Wine core (ntdll)", "title": "End a killed program's resources like an exit",
+                "kind": "bool", "default": "1",
+                "note": "On by default: when one program ends another with TerminateProcess (Ubisoft Connect's game starter "
+                        "ends the suspended copy of the game it could not inject into this way), its FEX code buffers, window and handles are "
+                        "released as an exit would release them. Without it they stay allocated until the app ends and count "
+                        "against every later program's code-buffer budget. 0 restores the old behaviour. Read once; \"[kill-reap]\" lines say when it ran.",
+                "sources": ["build/ntdll-unix/process_ios.c"]},
     "env.MADEIRA_KUSER_KEEP_REGS": {"category": "Wine core (ntdll)", "kind": "bool", "default": "0", "title": "Leave registers that only look like KUSER pointers alone",
                 "note": "Default off. 1: after BCD emulated a program's read of KUSER_SHARED_DATA (0x7ffe0000), it no longer rewrites the other registers that hold a value in that range to the "
                         "real address. Off, it does, which makes the next read through those registers direct; on, a program that keeps a constant like 0x7ffe0283 in a register gets it back as it was "
