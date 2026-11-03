@@ -1607,6 +1607,14 @@ OVERLAY = {
                         "does (Far Cry 3 behind Ubisoft Connect exited after 15 s). Sleep(0) is unchanged. 0 restores the old "
                         "host sleep.",
                 "sources": ["tools/patch-wine-sleep-kernel-apc.py"]},
+    "env.MADEIRA_WOA_RECHECK": {"category": "Synchronisation", "title": "Infinite waits on an address re-check every second",
+                "kind": "text", "default": "",
+                "note": "On by default: in a 32-bit program, a lock or condition-variable wait without a time limit wakes "
+                        "once a second and ends if the thread was already woken (its wake-up never arrived) or the value it "
+                        "waits on changed, as a spurious wake-up, which every caller handles; otherwise it waits again. Each "
+                        "such case is logged ([woa-rescue]). Ubisoft Connect's browser stayed blank this way in 2 of 11 Far "
+                        "Cry 3 starts. 0 restores the plain infinite wait.",
+                "sources": ["tools/patch-wine-woa-recheck.py"]},
     "yield-mode": {"category": "Synchronisation", "title": "Yield primitive (SwitchToThread, Sleep(0))",
                 "kind": "choice", "default": "", "sources": ["tools/patch-wine-yield-mode.py"],
                 "choices": [("", "sched_yield (default)"), ("switch", "Switch, no priority drop"),
