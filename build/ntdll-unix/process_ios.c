@@ -4040,6 +4040,34 @@ void ios_wow32_stack_dump( const char *tag )
 }
 #endif
 
+/* kill-reap-test:begin (tests/host/check-kill-reap.py compiles this region) */
+/* madeira-bcd kill-reap: a Windows process that ANOTHER process ends with NtTerminateProcess( its handle ) never runs
+ * process_exit_wrapper (the server's SIGQUIT does not arrive on iOS and its threads end in abort_thread), so its FEX code buffers,
+ * guest window, fd cache and child-table slot stayed allocated for the rest of the session. Ubisoft Connect's launcher ends the
+ * game's first, injected process this way in every session; the buffers (32 to 96 MB) then count against every later program's
+ * budget. The caller now runs, after the server accepted the kill, the same teardown the storm guard
+ * already runs for a child ended from outside (ios_end_child_process_async: close the master socket, child table, dead-PEB list,
+ * fd cache, JIT allocations, guest window). On by default, like the exit reclaim it completes; env.MADEIRA_KILL_REAP = 0
+ * restores the old behaviour. When to do it: */
+static int ios_kill_reap_wanted( int enabled, int status_ok, int server_says_self, int have_peb, int is_current_peb,
+                                 int live_child, int owns_exe_win )
+{
+    return enabled && status_ok && !server_says_self && have_peb && !is_current_peb && live_child && !owns_exe_win;
+}
+/* kill-reap-test:end */
+
+static int ios_kill_reap_enabled(void)
+{
+    static int cached = -1;
+
+    if (cached < 0)
+    {
+        const char *e = getenv( "MADEIRA_KILL_REAP" );
+        cached = (e && e[0] == '0' && !e[1]) ? 0 : 1;
+    }
+    return cached;
+}
+
 /******************************************************************************
  *              NtTerminateProcess  (NTDLL.@)
  */
@@ -4047,6 +4075,9 @@ NTSTATUS WINAPI NtTerminateProcess( HANDLE handle, LONG exit_code )
 {
     unsigned int ret;
     BOOL self;
+#ifdef WINE_IOS
+    void *reap_peb = NULL;   /* madeira-bcd kill-reap: the PEB of the process this call ends from outside */
+#endif
 
 #ifdef WINE_IOS
     if ((unsigned int)exit_code == 0xE0000008u && handle == NtCurrentProcess())
@@ -4251,6 +4282,14 @@ NTSTATUS WINAPI NtTerminateProcess( HANDLE handle, LONG exit_code )
         /* noreturn */
     }
 #endif
+#ifdef WINE_IOS
+    if (handle && handle != NtCurrentProcess() && ios_kill_reap_enabled())
+    {   /* ask the server who it is BEFORE it dies */
+        PROCESS_BASIC_INFORMATION pbi;
+
+        if (!NtQueryInformationProcess( handle, ProcessBasicInformation, &pbi, sizeof(pbi), NULL )) reap_peb = pbi.PebBaseAddress;
+    }
+#endif
     SERVER_START_REQ( terminate_process )
     {
         req->handle    = wine_server_obj_handle( handle );
@@ -4259,6 +4298,22 @@ NTSTATUS WINAPI NtTerminateProcess( HANDLE handle, LONG exit_code )
         self = reply->self;
     }
     SERVER_END_REQ;
+#ifdef WINE_IOS
+    if (reap_peb)
+    {
+        extern int ios_peb_is_live_child( const void *peb );
+        extern int ios_exe_win_owned_by( void *peb );
+        extern int ios_end_child_process_async( void *peb, int status );
+
+        if (ios_kill_reap_wanted( 1, !ret, self, 1, reap_peb == NtCurrentTeb()->Peb, ios_peb_is_live_child( reap_peb ),
+                                  ios_exe_win_owned_by( reap_peb ) ))
+        {
+            dprintf( 2, "[kill-reap] madeira-bcd: process peb=%p ended by another process (exit code 0x%x): releasing its code buffers, "
+                     "window and handles as an exit would\n", reap_peb, (unsigned int)exit_code );
+            ios_end_child_process_async( reap_peb, (int)exit_code );
+        }
+    }
+#endif
     if (self)
     {
 #ifdef WINE_IOS
