@@ -1337,6 +1337,21 @@ OVERLAY = {
                 "note": "0: while env.MADEIRA_EA_CEF is on, EADesktop.exe's command line is not rewritten (no --single-process "
                         "and the other switches); its --type= children are still refused. For a test of whether the EA app "
                         "takes a switch it does not know."},
+    # Ubisoft Connect's Chromium (CEF 135, 32-bit): process-count switches for upc.exe, and the libcef.dll edit that lets them work.
+    "env.MADEIRA_UBI_CEF": {"category": "Memory & JIT pool", "title": "Ubisoft Connect's Chromium: fewer processes",
+                "kind": "bool", "default": "1",
+                "note": "On by default: Ubisoft Connect's browser (upc.exe) runs with --in-process-gpu "
+                        "--disable-site-isolation-trials --renderer-process-limit=1 --disable-component-update and V8 "
+                        "--jitless (MADEIRA_JITLESS = 0 keeps V8's JIT), each only if its command line lacks it, as BCD does "
+                        "for Steam's and Social Club's browsers, and its libcef.dll is changed in memory (two bytes, only for "
+                        "a build BCD has checked; any other build is left alone and the log says so) so it keeps them: "
+                        "Ubisoft's CEF otherwise drops the browser's whole command line and the launcher needs more 32-bit "
+                        "windows than the session has. Its helper processes are not refused. 0 turns both off."},
+    "env.MADEIRA_UBI_CEF_FLAGS": {"category": "Memory & JIT pool", "title": "Extra upc.exe switches",
+                "kind": "text", "default": "",
+                "note": "Appended verbatim to upc.exe's command line unless env.MADEIRA_UBI_CEF = 0, e.g. --disable-gpu or "
+                        "--enable-logging=file --v=1. A --js-flags= in it gets --jitless as its first flag, unless "
+                        "MADEIRA_JITLESS = 0."},
     "env.MADEIRA_SC_PA_POOLS": {"category": "Memory & JIT pool", "title": "Room for Social Club's PartitionAlloc pools",
                 "kind": "choice", "default": "",
                 "choices": [("", "Off"), ("1", "Layout 1 (chrome_elf.dll only)"), ("2", "Layout 2 (chrome_elf, libcef, Oilpan)")],
