@@ -342,6 +342,70 @@ static size_t ios_pool_code_cap( size_t total, size_t head, size_t tail,
     return cap;
 }
 
+/* pool-code-policy-test:begin (tests/host/check-pool-code-policy.py compiles this region) */
+/* madeira-bcd pool-fg: code buffers for the program being played.
+ *
+ * ios_pool_code_cap above is first come, first served: it sees the pool's cursors and nothing about who is asking. With a launcher
+ * in front of the game, the launcher's helpers start first and take 64 to 128 MB buffers each, and the game, which starts last, is
+ * capped at 16 MB (Ubisoft Connect + Far Cry 3: about 450 MB of code buffers held by the launcher stack when the game asked; the game
+ * then rotated its buffer every one to two seconds).
+ *
+ * The app knows which program the player launched: it publishes that program's folder for the session in BCD_GAME_FOLDER (a Steam
+ * game's install folder, else the folder of the library entry's program; LibraryEntry.gameFolder, MadeiraDock.configure). A process
+ * whose image lies inside it keeps exactly today's budget cap; every other process of the session is held to IOS_POOL_OTHER_MAX
+ * per buffer, so the helpers that start first no longer take the room the game needs (a game with no helpers sees no change at all).
+ * A flat limit, not a ladder: FEX's carves are fixed-size and never merge. Free-list entries keep bypassing the budget cap. Without a
+ * folder nothing changes; env.MADEIRA_POOL_CODE_FOREGROUND = 0 turns it off. */
+#define IOS_POOL_OTHER_MAX     (32u * 1024 * 1024)
+
+/* The cap a process may be granted for a new carve: the program being played keeps the budget cap (16 MB floor); any other
+ * process is held to IOS_POOL_OTHER_MAX. */
+static size_t ios_pool_code_class_cap( int is_fg, size_t budget_cap )
+{
+    if (is_fg) return budget_cap;
+    return budget_cap > IOS_POOL_OTHER_MAX ? IOS_POOL_OTHER_MAX : budget_cap;
+}
+
+/* The length of the game folder `folder` (the Windows path the app wrote, "C:\..."), without trailing separators, or 0 when it names
+ * no usable folder: unset, empty, a drive root (everything would be inside), or a character outside ASCII (the comparison below folds
+ * ASCII case only, so such a folder would match nothing and the game would count as "other"). 0 turns the policy off. */
+static size_t ios_pool_game_folder_len( const char *folder )
+{
+    size_t n, k, seps = 0;
+
+    if (!folder) return 0;
+    n = strlen( folder );
+    while (n && (folder[n - 1] == '\\' || folder[n - 1] == '/')) n--;
+    for (k = 0; k < n; k++)
+    {
+        if ((unsigned char)folder[k] >= 0x80) return 0;
+        if (folder[k] == '\\' || folder[k] == '/') seps++;
+    }
+    return seps ? n : 0;
+}
+
+/* 1 when the image path `path` (len WCHARs) lies inside the first `n` characters of `folder`: ASCII case ignored, as Windows paths
+ * are, '/' and '\' alike, and a separator must follow the folder's name ("...\Far Cry 3" holds "...\Far Cry 3\bin\farcry3_d3d11.exe",
+ * not "...\Far Cry 3 Blood Dragon\fc3_blooddragon_d3d11.exe"). */
+static int ios_pool_path_in_folder( const WCHAR *path, size_t len, const char *folder, size_t n )
+{
+    size_t k;
+
+    if (!path || !folder || !n || len <= n) return 0;
+    for (k = 0; k < n; k++)
+    {
+        WCHAR c = path[k], w = (unsigned char)folder[k];
+
+        if (c == '/') c = '\\';
+        if (w == '/') w = '\\';
+        if (c >= 'A' && c <= 'Z') c += 32;
+        if (w >= 'A' && w <= 'Z') w += 32;
+        if (c != w) return 0;
+    }
+    return path[n] == '\\' || path[n] == '/';
+}
+/* pool-code-policy-test:end */
+
 /* madeira-bcd pool-mid: the one-hole helpers above applied to both holes (hole 1
  * below hole 2; with no second hole h2_off == h2_end == 0 and these are the
  * one-hole helpers). A head allocation jumps hole 1, then hole 2; a tail carve,
@@ -5696,7 +5760,7 @@ void ios_jit_set_teb(uintptr_t teb)
  * use (async-signal-safe — the SEGV redirect runs on the faulting thread),
  * with a pthread-key fallback for early boot before the slot offset is
  * known. NULL = unknown → resolves to parent/default mapping entries. */
-void *ios_jit_current_peb(void)
+static TEB *ios_jit_current_teb(void)
 {
     extern pthread_key_t ios_teb_tls_key;
     extern int ios_teb_tls_slot_offset;
@@ -5710,8 +5774,22 @@ void *ios_jit_current_peb(void)
         cur_teb = *(char **)(tsd_base + ios_teb_tls_slot_offset);
     }
     if (!cur_teb && ios_teb_tls_key) cur_teb = pthread_getspecific(ios_teb_tls_key);
-    if (!cur_teb) return NULL;
-    return ((TEB *)cur_teb)->Peb;
+    return (TEB *)cur_teb;
+}
+
+void *ios_jit_current_peb(void)
+{
+    TEB *teb = ios_jit_current_teb();
+
+    return teb ? teb->Peb : NULL;
+}
+
+/* madeira-bcd pool-fg: the calling pseudo-process's id, from the same TEB (0 when unknown). */
+static ULONG ios_jit_current_pid(void)
+{
+    TEB *teb = ios_jit_current_teb();
+
+    return teb ? HandleToULong( teb->ClientId.UniqueProcess ) : 0;
 }
 
 /* Owner-aware main-image machine (X3 mixed-mode); registry in loader_ios.c. */
@@ -5719,6 +5797,46 @@ USHORT ios_cur_image_info_machine(void)
 {
     extern const SECTION_IMAGE_INFORMATION *ios_cur_image_info(void);
     return ios_cur_image_info()->Machine;
+}
+
+/* madeira-bcd pool-fg: `budget_cap` (what ios_pool_code_cap gave under the global reserve) for the calling pseudo-process under the
+ * per-class limits (see ios_pool_code_class_cap). Its image path is read lock-free from its own PEB, as ios_thread_stack_floor does;
+ * an unreadable path counts as "other". Unchanged without a game folder, or with env.MADEIRA_POOL_CODE_FOREGROUND = 0. Both are read
+ * at each new carve (a few hundred per session), so a later session of the same app run sees its own folder. */
+static size_t ios_pool_fg_adjust( size_t budget_cap, size_t head_now, size_t tail_now )
+{
+    const char *folder = getenv( "BCD_GAME_FOLDER" ), *off = getenv( "MADEIRA_POOL_CODE_FOREGROUND" );
+    size_t n = ios_pool_game_folder_len( folder ), len = 0, cap = budget_cap, k, base = 0;
+    const WCHAR *path = NULL;
+    PEB *peb;
+    RTL_USER_PROCESS_PARAMETERS *pp;
+    static ULONG logged_pid[64];   /* one line per process (the launcher's helpers no longer use up the lines before the game) */
+    static unsigned int logged_n;
+    ULONG pid;
+    unsigned int i;
+    char name[48];
+    int is_fg;
+
+    if (!n || (off && !strcmp( off, "0" ))) return budget_cap;
+    peb = ios_jit_current_peb();
+    pp = peb ? peb->ProcessParameters : NULL;
+    if (pp) { path = pp->ImagePathName.Buffer; len = pp->ImagePathName.Length / sizeof(WCHAR); }
+    (void)head_now; (void)tail_now;
+    is_fg = ios_pool_path_in_folder( path, len, folder, n );
+    cap = ios_pool_code_class_cap( is_fg, budget_cap );
+    pid = ios_jit_current_pid();
+    for (i = 0; i < logged_n && logged_pid[i] != pid; i++) ;
+    if (i == logged_n && logged_n < 64)
+    {
+        logged_pid[logged_n++] = pid;
+        for (k = 0; path && k < len; k++) if (path[k] == '\\' || path[k] == '/') base = k + 1;
+        for (k = 0; path && base + k < len && k < sizeof(name) - 1; k++) name[k] = path[base + k] < 0x80 ? (char)path[base + k] : '?';
+        name[k] = 0;
+        dprintf( 2, "[pool-fg] madeira-bcd: %s is %s (game folder \"%s\"): code-buffer cap 0x%lx, 0x%lx without the policy\n",
+                 k ? name : "(no image path)", is_fg ? "the program being played" : "another program", folder,
+                 (unsigned long)cap, (unsigned long)budget_cap );
+    }
+    return cap;
 }
 
 /* Translate a PE address to a JIT pool address for a specific process.
@@ -34676,6 +34794,7 @@ static inline __attribute__((always_inline)) NTSTATUS ios_nt_impl_NtAllocateVirt
                                             ios_pool_head_reserve +
                                             ios_pool_hole_between( ios_jit_pool_size_global, head_now, tail_now,
                                                                    ios_jit_hole2_off, ios_jit_hole2_end ) );
+            cap = ios_pool_fg_adjust( cap, head_now, tail_now );   /* madeira-bcd pool-fg: per-class limits when the app published BCD_GAME_FOLDER */
             /* A retired generation of this size already sitting on the carve
              * free-list costs the pool nothing new: never refuse that. */
             budget_cap = cap;
