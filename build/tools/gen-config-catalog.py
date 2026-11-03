@@ -1558,6 +1558,14 @@ OVERLAY = {
                         "stayed at \"Preparing to Install...\" after its work was done. A timer that has waited "
                         "100 ms now goes before such a paint. 0: the strict order, as before. Read once per app run."},
     # madeira-bcd: the yield primitive (tools/patch-wine-yield-mode.py, wine/dlls/ntdll/unix/sync.c).
+    "env.MADEIRA_SLEEP_KERNEL_APC": {"category": "Exceptions & threads", "title": "Non-alertable sleeps run I/O completions",
+                "kind": "text", "default": "",
+                "note": "On by default: a non-alertable Sleep waits in BCD's Windows server, so an I/O completion queued for "
+                        "the sleeping thread (an overlapped pipe or socket read) runs during the sleep, as on Windows; "
+                        "before, it waited until the thread next entered the server, which a thread that only sleeps never "
+                        "does (Far Cry 3 behind Ubisoft Connect exited after 15 s). Sleep(0) is unchanged. 0 restores the old "
+                        "host sleep.",
+                "sources": ["tools/patch-wine-sleep-kernel-apc.py"]},
     "yield-mode": {"category": "Synchronisation", "title": "Yield primitive (SwitchToThread, Sleep(0))",
                 "kind": "choice", "default": "", "sources": ["tools/patch-wine-yield-mode.py"],
                 "choices": [("", "sched_yield (default)"), ("switch", "Switch, no priority drop"),
