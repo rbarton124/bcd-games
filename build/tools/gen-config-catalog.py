@@ -161,16 +161,21 @@ OVERLAY = {
                         "behind a launcher, is held to 16 MB buffers and runs slowly. A game with no other programs sees no "
                         "change. 0 turns it off. A \"[pool-fg]\" line says what each program got."},
     # madeira-bcd: NtWriteVirtualMemory of a 32-bit program into its own window (ios_self_write, build/ntdll-unix/virtual_ios.c).
-    "env.MADEIRA_SELF_WRITE": {"category": "Memory & JIT pool", "title": "A 32-bit program writes its own memory",
-                "kind": "bool", "default": "1",
-                "note": "On by default. A 32-bit program's WriteProcessMemory into itself is done in BCD, page by page, "
-                        "as on Windows: a page the program has made writable is written, and the write stops at any "
-                        "other page. A code page the emulator protected again right after the program's own "
-                        "VirtualProtect is written once and its protection put back. Before, every such write failed "
-                        "with access denied (BCD's server cannot write a program's memory), and Ubisoft Connect's "
-                        "launcher, which hooks its own system DLLs this way, ended with 0xdeadc0de. Writes into "
-                        "another program and 64-bit programs are unchanged. 0 sends every write to the server, as "
-                        "before. Log lines start [self-write]. Read once per session."},
+    "env.MADEIRA_SELF_WRITE": {"category": "Memory & JIT pool", "title": "A program writes its own memory",
+                "kind": "choice", "default": "",
+                "choices": [("", "On (default)"), ("32", "32-bit programs only"), ("0", "Off")],
+                "note": "On by default. A program's WriteProcessMemory into itself is done in BCD, page by page, as on "
+                        "Windows: a page the program has made writable is written, and the write stops at any other "
+                        "page. A code page the emulator protected again right after the program's own VirtualProtect "
+                        "is written once and its protection put back. A 32-bit program writes inside its own window; "
+                        "a 64-bit program into its DLLs and EXE (image memory; its other memory still goes to the "
+                        "server). Before, every such write failed with "
+                        "access denied (BCD's server cannot write a program's memory): Ubisoft Connect's launcher "
+                        "(32-bit) and Far Cry 4's FC64.dll (64-bit), which hook their own system DLLs this way, ended "
+                        "with 0xdeadc0de. Writes into another program are unchanged. 32 keeps 64-bit programs on the "
+                        "server, as before this change; 0 sends every write to the server. Log lines start "
+                        "[self-write], including up to 16 writes into the program's own memory that failed. "
+                        "Read once per session."},
     # madeira-bcd (round 624, Steam 113): two Dock experiments (tools/patch-dock-steam-readback.py; the Dock host reads them).
     "env.MADEIRA_DOCK_PUMP_MS": {"category": "Steam & Dock", "title": "Dock: a shorter wait loop while the game starts",
                 "kind": "text", "default": "", "sources": ["tools/patch-dock-steam-readback.py"],
@@ -677,6 +682,12 @@ OVERLAY = {
                 "note": "Default off. 1: after the first 8 GB of read-write reservations of 1 to 2 GB (no address given), each new one gets a real 63 MB head and the program is told it got "
                         "the full size; a commit that grows past the head fails and is logged ([thin] OVERFLOW). For a game that reserves dozens of 1 GB blocks and commits little of "
                         "each. Set it in the game's own file; read at session start."},
+    "env.MADEIRA_X64_HOOK_ZONE_MB": {"category": "Memory & JIT pool", "kind": "int", "default": "16",
+                "title": "Free room above a 64-bit program's ntdll for hook code (MB)",
+                "note": "16 by default; 0 turns it off; at most 256. A 64-bit program's ntdll gets this much free address space "
+                        "directly above it, which only a request for a fixed address uses, and its other DLLs go below it: a hook "
+                        "that needs its jump target within 2 GB of the function finds room there, as on Windows (Far Cry 4's "
+                        "FC64.dll searched upward from ntdll in vain and quit with 'Error at hooking'). Logged as [hook-zone]."},
     "env.MADEIRA_THIN_RESERVE_MB": {"category": "Memory & JIT pool", "kind": "int", "default": "64", "title": "Thin reservation: slot size (MB)",
                 "note": "With MADEIRA_THIN_RESERVE = 1: the stride of the thin heads, 16 to 512 MB; the real head is 1 MB less. 64 by default."},
     "env.MADEIRA_THIN_RESERVE_AFTER_GB": {"category": "Memory & JIT pool", "kind": "int", "default": "8", "title": "Thin reservation: GB reserved normally first",

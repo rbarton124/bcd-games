@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""env.MADEIRA_SELF_WRITE (on unless 0): NtWriteVirtualMemory of a 32-bit program into its own window.
+"""env.MADEIRA_SELF_WRITE (on unless 0; 32 = 32-bit programs only): NtWriteVirtualMemory of a program into its own memory.
 
 Why: the server writes another process's memory with its task port, which iOS pseudo-processes do not have
 (build/wineserver/mach_ios.c get_process_port), so a program's write into itself failed with
 STATUS_ACCESS_DENIED. Ubisoft Connect's upc.exe hooks its own ntdll, user32 and kernelbase with
-WriteProcessMemory and ends with 0xdeadc0de. build/ntdll-unix/virtual_ios.c now does that write itself
-(ios_self_write), page by page, as a guest store would, and stops where Windows would.
+WriteProcessMemory and ends with 0xdeadc0de; so does Far Cry 4's FC64.dll (64-bit), which hooks its own
+ntdll the same way. build/ntdll-unix/virtual_ios.c now does that write itself (ios_self_write), page by
+page, as a guest store would, and stops where Windows would. A 32-bit program writes inside its own window;
+a 64-bit program inside one of its image views, outside the session's 32-bit windows (ios_self_write_in_reach).
 
 What this checks, by cutting the real functions out of virtual_ios.c by signature (ios_self_write,
-its switch, its protect record and log line, NtWriteVirtualMemory, and the Wine helpers they call:
+its switch, its protect record and log lines, ios_self_write_in_reach, ios_wow_addr_in_any_window,
+NtWriteVirtualMemory, and the Wine helpers they call:
 get_unix_prot, check_write_access, mprotect_range, update_write_watches, ios_jit_anon_alias_find_cover
 and _lookup) and compiling them with -Wall -Wextra -Werror, then under AddressSanitizer and
 UndefinedBehaviorSanitizer, over constructed memory with 4 KB pages in 16 KB host pages: mprotect for the
@@ -31,11 +34,16 @@ cannot be written or read is an error code, not a fault):
   - the source is read with no lock held, every store happens under virtual_mutex, the pool lock only
     inside it, and both are released; the count pointer is stored after that, so one inside the
     destination ends up holding the count;
-  - another process's handle, a destination outside the window, or env.MADEIRA_SELF_WRITE = 0 send the
-    write to the server exactly as before;
+  - another process's handle, a 32-bit program's destination outside its window, or env.MADEIRA_SELF_WRITE = 0
+    send the write to the server exactly as before;
+  - a 64-bit program: pages of an image view are written by the same rules (directly, through the pool view,
+    through the protect record); other memory, no view, a range past the view, a write into or crossing into a
+    32-bit window or placeholder, and one longer than a window go to the server; env.MADEIRA_SELF_WRITE = 32 sends
+    every 64-bit write to the server;
   - the log: one line for each process's first write, at most 16 lines in all for writes that stopped or
-    used the protect record;
-  - seven deliberate breakages of the cut code still compile and are each caught.
+    used the protect record; a write into the program's own memory that the server refused: one line each, at
+    most 16, with its bitness; another process's none;
+  - twelve deliberate breakages of the cut code still compile and are each caught.
 And, by reading the sources: NtProtectVirtualMemory notes a successful change of its own process with the
 rounded range; the server's get_process_port and write_process_memory are untouched; CI runs this check;
 the catalog documents the switch.
@@ -86,6 +94,9 @@ CUT = "\n".join([
     function(src, "static void ios_self_write_note_protect( const char *base, SIZE_T size, ULONG prot )"),
     function(src, "static SIZE_T ios_self_write( char *dst, const char *src, SIZE_T size, unsigned *paths )"),
     function(src, "static void ios_self_write_log( const char *dst, SIZE_T size, SIZE_T done, unsigned paths )"),
+    function(src, "static int ios_wow_addr_in_any_window( const void *addr )"),
+    function(src, "static int ios_self_write_in_reach( const char *addr, SIZE_T size, int mode )"),
+    function(src, "static void ios_self_write_server_log( const void *addr, SIZE_T size, NTSTATUS status )"),
     function(src, "NTSTATUS WINAPI NtWriteVirtualMemory( HANDLE process, void *addr, const void *buffer,"),
 ])
 check("the functions, the protect record and the seven VPROT bits are found",
@@ -191,7 +202,26 @@ static kern_return_t mach_vm_write( mach_port_t t, mach_vm_address_t a, vm_offse
     return kcopy( (void *)(uintptr_t)a, (void *)s, n );
 }
 static int virtual_check_buffer_for_read( const void *p, SIZE_T n ) { (void)p; (void)n; return 1; }
-static int ios_wow_in_window( const void *a ) { return (const char *)a >= G && (const char *)a < G + NPAGES * PG; }
+/* wow32: the caller is a 32-bit program whose window is G; otherwise a 64-bit program whose memory is G, and the
+ * session's 32-bit windows and placeholders are the ones below (the harness's window size is 16 pages). A 32-bit
+ * program's own window is pages 0-47: pages 48-63 are writable memory outside it */
+static int wow32 = 1;
+static ULONG_PTR ios_wow_base( void ) { return wow32 ? (ULONG_PTR)G : 0; }
+static int ios_wow_in_window( const void *a ) { return wow32 && (const char *)a >= G && (const char *)a < G + 48 * PG; }
+#define IOS_WOW_WINDOW_SIZE ((ULONG_PTR)16 * PG)
+static struct { ULONG_PTR base; } ios_wow_windows[2], ios_wow_placeholders[2];
+static unsigned ios_wow_window_count, ios_wow_placeholder_count;
+/* a 64-bit program's views: all of G is one view, an image (0), other memory (1), or no view at all (2) */
+#define SEC_IMAGE 0x1000000
+struct file_view { void *base; size_t size; unsigned protect; };
+static int view_kind;
+static struct file_view *find_view( const void *a, size_t n )
+{
+    static struct file_view v;
+    if (view_kind == 2 || (const char *)a < G || (const char *)a + n > G + NPAGES * PG) return NULL;
+    v.base = G; v.size = NPAGES * PG; v.protect = view_kind ? 0 : SEC_IMAGE;
+    return &v;
+}
 #define wine_server_obj_handle(h) ((unsigned)(ULONG_PTR)(h))
 #define wine_server_client_ptr(p) ((uint64_t)(ULONG_PTR)(p))
 #define wine_server_add_data(r,b,n) ((void)(b), (void)(n))
@@ -363,12 +393,97 @@ static void test_nt( void )
     T( NtWriteVirtualMemory( NtCurrentProcess(), P(9), data, 16, &n ) == STATUS_ACCESS_DENIED && n == 0 && n_server == 1 );
     T( NtWriteVirtualMemory( (HANDLE)0x44, P(1), data, 16, &n ) == STATUS_ACCESS_DENIED && n == 0 && n_server == 2 );
     T( NtWriteVirtualMemory( NtCurrentProcess(), data, P(1), 16, &n ) == STATUS_ACCESS_DENIED && n_server == 3 );   /* outside the window */
+    layout( 48, 4, RW );
+    T( NtWriteVirtualMemory( NtCurrentProcess(), P(48), data, 16, &n ) == STATUS_ACCESS_DENIED && n_server == 4 &&
+       P(48)[0] == 0x11 );                                                                      /* writable, not its window */
+    T( NtWriteVirtualMemory( NtCurrentProcess(), P(47) + 0xff8, data, 16, &n ) == STATUS_ACCESS_DENIED && n_server == 5 );
+    n_server = 3;
     T( NtWriteVirtualMemory( NtCurrentProcess(), P(1), data, 0, &n ) == STATUS_ACCESS_DENIED && n_server == 4 );
     T( NtWriteVirtualMemory( NtCurrentProcess(), P(7) + 0xff8, data, ~(SIZE_T)0, &n ) == STATUS_ACCESS_DENIED && n_server == 5 );
     T( NtWriteVirtualMemory( NtCurrentProcess(), P(1), data, 16, NULL ) == STATUS_SUCCESS );
     /* the count pointer inside the destination: stored last, so it holds the count */
     T( NtWriteVirtualMemory( NtCurrentProcess(), P(2), data, 32, (SIZE_T *)(P(2) + 8) ) == STATUS_SUCCESS &&
        *(SIZE_T *)(P(2) + 8) == 32 && !memcmp( P(2), data, 8 ) );
+}
+
+/* a 64-bit program: its own memory is G; a 32-bit window at pages 48-63 and a placeholder at 16-31 are not its own */
+static void as_64bit( void )
+{
+    wow32 = 0;
+    ios_wow_windows[0].base = (ULONG_PTR)P(48); ios_wow_window_count = 1;
+    ios_wow_placeholders[1].base = (ULONG_PTR)P(16); ios_wow_placeholder_count = 2;
+}
+
+static unsigned char big[32 * PG];
+
+static void test_nt64( void )
+{
+    SIZE_T n = 99;
+
+    as_64bit();
+    reset(); layout( 0, 16, RW ); layout( 36, 28, RW );
+    T( NtWriteVirtualMemory( NtCurrentProcess(), P(1), data, 16, &n ) == STATUS_SUCCESS && n == 16 && !n_server &&
+       !memcmp( P(1), data, 16 ) );
+    T( NtWriteVirtualMemory( NtCurrentProcess(), P(15) + 0xffc, data, 16, &n ) == STATUS_ACCESS_DENIED && n == 0 &&
+       n_server == 1 && P(15)[0xffc] == 0x11 );                                                 /* into the placeholder */
+    layout( 16, 16, RW );
+    T( NtWriteVirtualMemory( NtCurrentProcess(), P(17), data, 16, &n ) == STATUS_ACCESS_DENIED && n_server == 2 &&
+       P(17)[0] == 0x11 );                                                                      /* inside it, writable */
+    T( NtWriteVirtualMemory( NtCurrentProcess(), P(49), data, 16, &n ) == STATUS_ACCESS_DENIED && n_server == 3 &&
+       P(49)[0] == 0x11 );                                                                      /* a 32-bit window */
+    T( NtWriteVirtualMemory( NtCurrentProcess(), P(47) + 0xff8, data, 16, &n ) == STATUS_ACCESS_DENIED && n_server == 4 &&
+       P(47)[0xff8] == 0x11 );                                                                  /* crossing into it */
+    T( NtWriteVirtualMemory( NtCurrentProcess(), P(40), data, 16, &n ) == STATUS_SUCCESS && n == 16 );  /* below it */
+    /* both ends outside, a window inside: longer than a window, refused */
+    reset(); layout( 0, 48, RW );
+    T( NtWriteVirtualMemory( NtCurrentProcess(), P(8), big, sizeof(big), &n ) == STATUS_ACCESS_DENIED && n_server == 1 &&
+       P(8)[0] == 0x11 && P(20)[0] == 0x11 );
+    T( NtWriteVirtualMemory( NtCurrentProcess(), P(0), big, 16 * PG, &n ) == STATUS_SUCCESS && n_server == 1 );   /* 0-15 */
+    T( NtWriteVirtualMemory( NtCurrentProcess(), P(1), big, 16 * PG, &n ) == STATUS_ACCESS_DENIED && n_server == 2 );   /* 1-16 */
+    T( NtWriteVirtualMemory( NtCurrentProcess(), P(32), big, 16 * PG, &n ) == STATUS_SUCCESS && n == 16 * PG );   /* 32-47 */
+    /* the page rules are the same: a read-only page is the server's, a code page re-armed after VirtualProtect is
+     * written once (FC64.dll's hook into its ntdll), the pool's pages through the RW view */
+    reset(); layout( 0, 8, RW ); layout( 8, 4, RX ); layout( 32, 4, RWX );
+    T( NtWriteVirtualMemory( NtCurrentProcess(), P(9), data, 5, &n ) == STATUS_ACCESS_DENIED && n_server == 1 );
+    protect( P(9), PG, PAGE_EXECUTE_READWRITE );
+    T( NtWriteVirtualMemory( NtCurrentProcess(), P(9), data, 5, &n ) == STATUS_SUCCESS && n == 5 && n_server == 1 &&
+       !memcmp( P(9), data, 5 ) && !writable( P(9) ) );
+    T( NtWriteVirtualMemory( NtCurrentProcess(), P(33), data, 7, &n ) == STATUS_SUCCESS && !memcmp( alias_rw + PG, data, 7 ) );
+    T( NtWriteVirtualMemory( (HANDLE)0x44, P(1), data, 16, &n ) == STATUS_ACCESS_DENIED && n_server == 2 );   /* another process */
+    /* only inside an image view: other memory (a heap, a stack, FEX's allocations) and no view go to the server */
+    view_kind = 1;
+    T( NtWriteVirtualMemory( NtCurrentProcess(), P(1), data, 16, &n ) == STATUS_ACCESS_DENIED && n_server == 3 && P(1)[0] == 0x11 );
+    view_kind = 2;
+    T( NtWriteVirtualMemory( NtCurrentProcess(), P(1), data, 16, &n ) == STATUS_ACCESS_DENIED && n_server == 4 && P(1)[0] == 0x11 );
+    view_kind = 0;
+    T( NtWriteVirtualMemory( NtCurrentProcess(), G + NPAGES * PG - 8, data, 16, &n ) == STATUS_ACCESS_DENIED && n_server == 5 );  /* past the view */
+    T( !depth );
+    wow32 = 1;
+}
+
+static void test_only32( void )   /* env.MADEIRA_SELF_WRITE = 32: a 64-bit program's write goes to the server, as before */
+{
+    SIZE_T n = 99;
+
+    as_64bit();
+    reset(); layout( 0, 8, RW );
+    T( NtWriteVirtualMemory( NtCurrentProcess(), P(1), data, 16, &n ) == STATUS_ACCESS_DENIED && n_server == 1 && P(1)[0] == 0x11 );
+    wow32 = 1;
+    reset(); layout( 0, 8, RW );
+    T( NtWriteVirtualMemory( NtCurrentProcess(), P(1), data, 16, &n ) == STATUS_SUCCESS && !n_server );
+}
+
+static void test_srvlog( void )   /* a fresh process: writes into its own memory refused by the server */
+{
+    SIZE_T n;
+    int i;
+
+    reset(); layout( 0, 8, RW );
+    T( NtWriteVirtualMemory( NtCurrentProcess(), data, P(1), 16, &n ) == STATUS_ACCESS_DENIED );   /* 32-bit, outside */
+    T( NtWriteVirtualMemory( (HANDLE)0x44, P(1), data, 16, &n ) == STATUS_ACCESS_DENIED );        /* another process: no line */
+    as_64bit();
+    for (i = 0; i < 20; i++) NtWriteVirtualMemory( NtCurrentProcess(), P(49), data, 16, &n );
+    wow32 = 1;
 }
 
 static void test_log( void )   /* a fresh process: the log's counters start at 0 */
@@ -421,7 +536,9 @@ int main( int argc, char **argv )
     ios_jit_anon_alias_count = 1;
     if (argc > 1 && !strcmp( argv[1], "log" )) test_log();
     else if (argc > 1 && !strcmp( argv[1], "off" )) test_off();
-    else { test_pages(); test_record(); test_thread(); test_split(); test_nt(); }
+    else if (argc > 1 && !strcmp( argv[1], "only32" )) test_only32();
+    else if (argc > 1 && !strcmp( argv[1], "srvlog" )) test_srvlog();
+    else { test_pages(); test_record(); test_thread(); test_split(); test_nt(); test_nt64(); }
     printf( "%s\n", fails ? "HARNESS FAILED" : "harness ok" );
     return fails != 0;
 }
@@ -436,6 +553,14 @@ BREAKS = [
     ("the count taken before the store", [("        if (!ok) break;\n        done += len;", "        done += len;\n        if (!ok) break;")]),
     ("the host page's protection instead of the page's", [("        vprot = get_page_vprot( at );", "        vprot = get_host_page_vprot( at );")]),
     ("the host page not put back", [("                mprotect_range( at, len, 0, 0 );\n", "")]),
+    ("a 64-bit write into a 32-bit window", [("        ios_wow_addr_in_any_window( addr ) || ios_wow_addr_in_any_window( addr + size - 1 )) return 0;",
+                                              "        0) return 0;")]),
+    ("a 64-bit write outside an image", [("image = (view = find_view( addr, size )) && (view->protect & SEC_IMAGE);",
+                                          "image = 1; (void)view;")]),
+    ("a range longer than a window", [("mode != 1 || size > IOS_WOW_WINDOW_SIZE ||", "mode != 1 ||")]),
+    ("a placeholder is not a window", [("        ULONG_PTR b = ios_wow_placeholders[i].base;", "        ULONG_PTR b = 0;")]),
+    ("a 32-bit program writes outside its window", [("return ios_wow_in_window( addr ) && ios_wow_in_window( addr + size - 1 );",
+                                                     "return 1;")]),
     ("the source read under the lock", [
         ("got != len) break;\n        server_enter_uninterrupted_section( &virtual_mutex, &sigset );", "got != len) break;"),
         ("        if (mach_vm_read_overwrite(", "        server_enter_uninterrupted_section( &virtual_mutex, &sigset );\n        if (mach_vm_read_overwrite(")]),
@@ -470,7 +595,7 @@ else:
         if b.returncode == 0:
             r = run(exe)
             check("pages, write watch, the pool view, the protect record, threads, 4000 random spans, "
-                  "NtWriteVirtualMemory", r.returncode == 0 and r.stdout.strip().endswith("harness ok"), r.stdout + r.stderr)
+                  "NtWriteVirtualMemory for a 32-bit and a 64-bit program", r.returncode == 0 and r.stdout.strip().endswith("harness ok"), r.stdout + r.stderr)
             r = run(exe, "log")
             log = [l for l in r.stderr.splitlines() if l.startswith("[self-write]")]
             check("the log: one line for each process's first write, then at most 16 for writes that stopped",
@@ -479,9 +604,21 @@ else:
                   all(", 0 written ( ), stopped at " in l and "(page vprot 0x21): server request, as before" in l for l in log[2:]),
                   "\n".join(log))
             seen = {v: run(exe, "switch", **({} if v is None else {"MADEIRA_SELF_WRITE": v})).stdout.strip()
-                    for v in (None, "", "1", "yes", "0")}
-            check("the switch: unset, '', '1' and 'yes' are on; '0' is off",
-                  seen == {None: "1", "": "1", "1": "1", "yes": "1", "0": "0"}, seen)
+                    for v in (None, "", "1", "yes", "32", "0")}
+            check("the switch: unset, '', '1' and 'yes' are on; '32' is 32-bit programs only; '0' is off",
+                  seen == {None: "1", "": "1", "1": "1", "yes": "1", "32": "2", "0": "0"}, seen)
+            r = run(exe, "only32", MADEIRA_SELF_WRITE="32")
+            check("MADEIRA_SELF_WRITE=32: a 64-bit program's write goes to the server, a 32-bit program's is done here",
+                  r.returncode == 0, r.stdout)
+            r = run(exe, "srvlog")
+            log = [l for l in r.stderr.splitlines() if l.startswith("[self-write]")]
+            check("a write into the program's own memory refused by the server: one line each, at most 16; another "
+                  "process's none",
+                  r.returncode == 0 and len(log) == 16 and
+                  log[0] == "[self-write] pid 0030: %s+0x10, a 32-bit write into its own memory failed: 0xc0000022"
+                  % log[0].split(" ")[3].split("+")[0] and
+                  all(", a 64-bit write into its own memory failed: 0xc0000022" in l for l in log[1:]),
+                  "\n".join(log) + r.stdout)
             r = run(exe, "off", MADEIRA_SELF_WRITE="0")
             check("MADEIRA_SELF_WRITE=0: NtWriteVirtualMemory sends the write to the server and no protect is recorded",
                   r.returncode == 0, r.stdout)
@@ -501,6 +638,12 @@ check("NtWriteVirtualMemory: the branch is before the server request, which is u
       "            wine_server_add_data( req, buffer, size );\n"
       "            status = wine_server_call( req );\n"
       "            size = reply->written;\n" in nwvm)
+check("NtWriteVirtualMemory: the branch asks ios_self_write_in_reach with the switch's mode; a refused write into the "
+      "program's own memory is logged after the server request",
+      "(self_mode = ios_self_write_enabled()) &&" in nwvm and "ios_self_write_in_reach( addr, size, self_mode ))" in nwvm and
+      nwvm.index("SERVER_END_REQ;") < nwvm.index(
+          "    if (status && process == NtCurrentProcess()) ios_self_write_server_log( addr, want, status );")
+      < nwvm.index("    if (bytes_written) *bytes_written = size;\n    return status;"))
 nvp = function(src, "NTSTATUS WINAPI NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_T *size_ptr,")
 note = "        ios_self_write_note_protect( base, size, new_prot );"
 check("NtProtectVirtualMemory notes a successful change of its own process, with the rounded range",
@@ -510,6 +653,10 @@ check("NtProtectVirtualMemory notes a successful change of its own process, with
 check("the switch is read in one place, and the record only by these functions",
       src.count('getenv( "MADEIRA_SELF_WRITE" )') == 1 and src.count("ios_self_write_grant") == 8 and
       src.count("ios_self_write(") == 2 and src.count("ios_self_write_note_protect(") == 2)
+check("the image test reads the view tree under virtual_mutex",
+      "    server_enter_uninterrupted_section( &virtual_mutex, &sigset );\n"
+      "    image = (view = find_view( addr, size )) && (view->protect & SEC_IMAGE);\n"
+      "    server_leave_uninterrupted_section( &virtual_mutex, &sigset );" in function(src, "static int ios_self_write_in_reach( const char *addr, SIZE_T size, int mode )"))
 check("the server's port and write path are untouched (writes into another process still refused)",
       "    return process->trace_data;\n}" in function(mach, "static mach_port_t get_process_port( struct process *process )") and
       "    mach_port_t process_port = get_process_port( process );\n    mach_vm_offset_t data;\n\n    if (written) *written = 0;\n\n"
@@ -520,8 +667,10 @@ cat = (R / "app/Madeira/ConfigCatalog.generated.swift").read_text()
 gen = (R / "build/tools/gen-config-catalog.py").read_text()
 check("the catalog documents env.MADEIRA_SELF_WRITE (on by default) in the generator's overlay and its output",
       '"env.MADEIRA_SELF_WRITE": {"category": "Memory & JIT pool"' in gen and
-      'ConfigOption(key: "env.MADEIRA_SELF_WRITE", title: "A 32-bit program writes its own memory", kind: .bool, defaultValue: "1", '
-      'category: "Memory & JIT pool"' in cat)
+      'ConfigOption(key: "env.MADEIRA_SELF_WRITE", title: "A program writes its own memory", kind: .choice, defaultValue: "", '
+      'category: "Memory & JIT pool"' in cat and
+      'choices: [("", "On (default)"), ("32", "32-bit programs only"), ("0", "Off")], sources: ["build/ntdll-unix/virtual_ios.c"])'
+      in cat)
 
 print("PASS: self-write" if ok else "FAILED: self-write")
 sys.exit(0 if ok else 1)

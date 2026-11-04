@@ -1669,6 +1669,15 @@ jobs:
           python3 tests/host/check-avail-phys.py
           python3 tools/patch-wine-avail-phys.py wine/dlls/ntdll/unix/system.c
 
+      # madeira-bcd: a 64-bit program's NtRaiseHardError logs the strings of its message ([harderror] lines; log
+      # only, the call still returns STATUS_NOT_IMPLEMENTED). The 32-bit side's [ubi-harderror-v1] trace is in
+      # dlls/wow64. Far Cry 4's FC64.dll ended with such a message box and the log had only its numbers.
+      - name: Check the hard-error text
+        continue-on-error: true   # LAB FORK: a failing check is read from the log; it does not stop the build
+        run: python3 tests/host/check-hard-error-text.py
+      - name: Patch wine so a 64-bit program's hard error logs its text
+        run: python3 tools/patch-wine-hard-error-text.py wine/dlls/ntdll/unix/system.c
+
       # Self-modifying-code fault storms (RockstarService, builds 435-437):
       # the ARM64EC SMC path decides plain and backpatched stores without
       # FEX's backpatch lock, and the PE ntdll's uncapped "[rtcs] pre" line is
@@ -3664,9 +3673,10 @@ jobs:
         continue-on-error: true   # LAB FORK: a host check may need a file BCD keeps private; the build itself stays fatal
         run: python3 tests/host/check-wc-old-prot.py
 
-      # madeira-bcd: env.MADEIRA_SELF_WRITE (on unless 0): a 32-bit program's NtWriteVirtualMemory into its own window is done in
-      # ntdll (ios_self_write), page by page, as on Windows. The real functions cut out of virtual_ios.c, compiled strict and under
-      # ASan/UBSan over constructed pages (aliased, write-watched, re-armed), with seven deliberate breakages.
+      # madeira-bcd: env.MADEIRA_SELF_WRITE (on unless 0; 32 = 32-bit programs only): a program's NtWriteVirtualMemory into its own
+      # memory (a 32-bit program's window; a 64-bit program's images) is done in ntdll (ios_self_write), page by page, as on
+      # Windows. The real functions cut out of virtual_ios.c, compiled strict and under ASan/UBSan over constructed pages
+      # (aliased, write-watched, re-armed) for a 32-bit and a 64-bit program, with twelve deliberate breakages.
       - name: Check self-write (NtWriteVirtualMemory into the program's own memory)
         continue-on-error: true   # LAB FORK: a failing check is read from the log; it does not stop the build
         run: python3 tests/host/check-self-write.py
@@ -4341,6 +4351,12 @@ jobs:
       - name: Check thin reservations
         continue-on-error: true   # LAB FORK: a host check may need a file BCD keeps private; the build itself stays fatal
         run: python3 tests/host/check-thin-reserve.py
+
+      # madeira-bcd: env.MADEIRA_X64_HOOK_ZONE_MB (16 by default): free address space above each 64-bit process's ntdll for
+      # hook code (a FIXED_ONLY reserved area); the kind, the placement, the release and FC64's probe on a fake map.
+      - name: Check the 64-bit hook zone
+        continue-on-error: true   # LAB FORK: a failing check is read from the log; it does not stop the build
+        run: python3 tests/host/check-x64-hook-zone.py
 
       # madeira-bcd (upstream port 2026-10-25): env.MADEIRA_IMAGE_LOW_ALIAS = 1 (the narrowed form of an image's address gets a name)
       # and env.MADEIRA_QUERY_CLIP = 1 (VirtualQuery calls only allocatable memory free); both off unless set; the switches and the pure
