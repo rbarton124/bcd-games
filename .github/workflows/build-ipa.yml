@@ -1530,6 +1530,14 @@ jobs:
           python3 tests/host/check-avail-phys.py
           python3 tools/patch-wine-avail-phys.py wine/dlls/ntdll/unix/system.c
 
+      # madeira-bcd: a 64-bit program's NtRaiseHardError logs the strings of its message ([harderror] lines; log
+      # only, the call still returns STATUS_NOT_IMPLEMENTED). The 32-bit side's [ubi-harderror-v1] trace is in
+      # dlls/wow64. Far Cry 4's FC64.dll ended with such a message box and the log had only its numbers.
+      - name: Check the hard-error text
+        run: python3 tests/host/check-hard-error-text.py
+      - name: Patch wine so a 64-bit program's hard error logs its text
+        run: python3 tools/patch-wine-hard-error-text.py wine/dlls/ntdll/unix/system.c
+
       # Self-modifying-code fault storms (RockstarService, builds 435-437):
       # the ARM64EC SMC path decides plain and backpatched stores without
       # FEX's backpatch lock, and the PE ntdll's uncapped "[rtcs] pre" line is
