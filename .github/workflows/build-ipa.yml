@@ -3413,9 +3413,10 @@ jobs:
       - name: Check the PAGE_WRITECOPY old protection (V8 flag freeze)
         run: python3 tests/host/check-wc-old-prot.py
 
-      # madeira-bcd: env.MADEIRA_SELF_WRITE (on unless 0): a 32-bit program's NtWriteVirtualMemory into its own window is done in
-      # ntdll (ios_self_write), page by page, as on Windows. The real functions cut out of virtual_ios.c, compiled strict and under
-      # ASan/UBSan over constructed pages (aliased, write-watched, re-armed), with seven deliberate breakages.
+      # madeira-bcd: env.MADEIRA_SELF_WRITE (on unless 0; 32 = 32-bit programs only): a program's NtWriteVirtualMemory into its own
+      # memory (a 32-bit program's window; a 64-bit program's images and hook zone) is done in ntdll (ios_self_write), page by
+      # page, as on Windows. The real functions cut out of virtual_ios.c, compiled strict and under ASan/UBSan over constructed
+      # pages (aliased, write-watched, re-armed) for a 32-bit and a 64-bit program, with thirteen deliberate breakages.
       - name: Check self-write (NtWriteVirtualMemory into the program's own memory)
         run: python3 tests/host/check-self-write.py
 

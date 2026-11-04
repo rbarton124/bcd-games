@@ -127,6 +127,7 @@ fns = [cut(src, "static void mmap_add_reserved_area( void *addr, SIZE_T size )")
        cut(src, "static int mmap_add_fixed_only_area( void *addr, SIZE_T size )")]
 zone_map = cut(src, "static NTSTATUS ios_hook_zone_map_image(")
 zone_died = cut(src, "static void ios_hook_zone_owner_died( void *dead_peb )")
+zone_holds = cut(src, "static int ios_hook_zone_holds( const char *addr, SIZE_T size )")
 FAKE = r'''
 #include <assert.h>
 #include <stddef.h>
@@ -277,6 +278,17 @@ int main( void )
         T( n == IOS_HOOK_ZONES );
         hole_hi = (char *)0x71f5770000;
     }
+    /* the self-write's question: inside the CALLING process's zone (a trampoline) */
+    {
+        char *z = (char *)the_view.base + 0x130000;
+        cur_peb = &child;
+        T( ios_hook_zone_holds( z + 8, 5 ) && ios_hook_zone_holds( z, 16 << 20 ) );
+        T( !ios_hook_zone_holds( z - 1, 2 ) && !ios_hook_zone_holds( z + (16 << 20) - 4, 8 ) && !ios_hook_zone_holds( (char *)the_view.base, 5 ) );
+        cur_peb = &n;   /* another process */
+        T( !ios_hook_zone_holds( z + 8, 5 ) );
+        cur_peb = NULL;
+        T( !ios_hook_zone_holds( z + 8, 5 ) );
+    }
     /* the process ends: its record and area go */
     ios_hook_zone_owner_died( &child );
     T( removed_base == (char *)the_view.base + 0x130000 && !area_at( removed_base ) && !ios_hook_zone_find( ios_hook_zones, &child, NULL ) );
@@ -304,11 +316,13 @@ int main( void )
     return fails != 0;
 }
 '''
-peb_decl = "static const void *peb __attribute__((unused));\nstatic void *ios_jit_current_peb( void ) __attribute__((unused));\nstatic void *ios_jit_current_peb( void ) { return NULL; }\n"
-code = FAKE + "\n".join(fns) + peb_decl + ZONES + "static void ios_hook_zone_owner_died( void *peb );\n" + zone_map + zone_died + T2
+peb_decl = ("static const void *peb __attribute__((unused));\nstatic const void *cur_peb;\n"
+            "static void *ios_jit_current_peb( void ) { return (void *)cur_peb; }\n")
+code = FAKE + "\n".join(fns) + peb_decl + ZONES + "static void ios_hook_zone_owner_died( void *peb );\n" + zone_holds + zone_map + zone_died + T2
 with tempfile.TemporaryDirectory() as tmp:
     r, out = build_and_run(code, tmp, "fake")
-    check("the adder, the merge, the split, the placement with its failures, FC64's probe, the release (ASan/UBSan)",
+    check("the adder, the merge, the split, the placement with its failures, FC64's probe, the calling process's zone, "
+          "the release (ASan/UBSan)",
           r is not None and r.returncode == 0, out)
 
 # ---------------------------------------------------------------- 4. the wiring

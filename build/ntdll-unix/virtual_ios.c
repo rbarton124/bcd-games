@@ -26728,6 +26728,15 @@ static ULONG_PTR ios_hook_zone_ceiling( ULONG_PTR limit_low, ULONG_PTR limit_hig
     return ios_hook_zone_limit( ios_hook_zone_find( ios_hook_zones, cur, peb ), limit_low, limit_high );
 }
 
+/* ios_self_write_in_reach, virtual_mutex held: [addr, addr + size) lies inside the calling process's own zone (a hook's
+ * trampoline, which a hook library may write with WriteProcessMemory on itself). */
+static int ios_hook_zone_holds( const char *addr, SIZE_T size )
+{
+    const struct ios_hook_zone *z = ios_hook_zone_find( ios_hook_zones, ios_jit_current_peb(), peb );
+
+    return z && (ULONG_PTR)addr >= z->base && (ULONG_PTR)addr + size <= z->base + z->size;
+}
+
 /* map_image_view, virtual_mutex held: map a 64-bit process's ntdll (size bytes) top-down in [limit_low, limit_high]
  * with the zone directly above it. STATUS_SUCCESS: mapped with its zone; anything else: nothing changed, the caller
  * places the image as before. */
@@ -30608,13 +30617,15 @@ NTSTATUS virtual_uninterrupted_write_memory( void *addr, const void *buffer, SIZ
  * Returns the bytes written; *paths gets 1 direct, 2 RW view, 4 temporarily writable. */
 static __thread struct { ULONG_PTR begin, end; } ios_self_write_grant;
 
+/* env.MADEIRA_SELF_WRITE: 0 off; 32: 32-bit programs only (the earlier behaviour); anything else: both.
+ * Returns 0 (off), 1 (both) or 2 (32-bit only). */
 static int ios_self_write_enabled(void)
 {
     static int cached = -1;
     if (cached < 0)
     {
         const char *s = getenv( "MADEIRA_SELF_WRITE" );
-        cached = !(s && *s == '0');
+        cached = (s && *s == '0') ? 0 : (s && !strcmp( s, "32" )) ? 2 : 1;
     }
     return cached;
 }
@@ -30707,6 +30718,40 @@ static void ios_self_write_log( const char *dst, SIZE_T size, SIZE_T done, unsig
     dprintf( 2, "[self-write] pid %04x: %p+%#lx, %#lx written (%s%s%s )%s\n", (unsigned)pid, dst, (unsigned long)size,
              (unsigned long)done, (paths & 1) ? " direct" : "", (paths & 2) ? " rw-view" : "",
              (paths & 4) ? " protect-record" : "", stop );
+}
+
+/* madeira-bcd self-write: whether [addr, addr + size) may be written by the calling program here. A 32-bit program:
+ * inside its own window, as before. A 64-bit program (mode 1): what a hook writes, inside one view, outside every
+ * 32-bit window and placeholder: an image view (a DLL or EXE: the hooked code) or a view in its own hook zone (the
+ * trampoline). Far Cry 4's FC64.dll writes both with WriteProcessMemory on itself, as Ubisoft Connect's 32-bit client
+ * does. A 64-bit process's other memory has no owner here (every pseudo-process shares one address space, and FEX's
+ * own allocations are views too), so a write there still goes to the server and is refused, as before. A window is 4 GB and contiguous, so a range of at most that
+ * size whose two ends lie outside every window misses every window. The page rules of ios_self_write decide the
+ * rest, as for a 32-bit program. */
+static int ios_self_write_in_reach( const char *addr, SIZE_T size, int mode )
+{
+    struct file_view *view;
+    sigset_t sigset;
+    int own;
+
+    if (ios_wow_base()) return ios_wow_in_window( addr ) && ios_wow_in_window( addr + size - 1 );
+    if (mode != 1 || size > IOS_WOW_WINDOW_SIZE ||
+        ios_wow_addr_in_any_window( addr ) || ios_wow_addr_in_any_window( addr + size - 1 )) return 0;
+    server_enter_uninterrupted_section( &virtual_mutex, &sigset );
+    own = (view = find_view( addr, size )) && ((view->protect & SEC_IMAGE) || ios_hook_zone_holds( addr, size ));
+    server_leave_uninterrupted_section( &virtual_mutex, &sigset );
+    return own;
+}
+
+/* A write into the program's own memory (the pseudo-handle) that failed: one line each, at most 16 (log only). */
+static void ios_self_write_server_log( const void *addr, SIZE_T size, NTSTATUS status )
+{
+    static unsigned n;
+
+    if (__sync_fetch_and_add( &n, 1 ) >= 16) return;
+    dprintf( 2, "[self-write] pid %04x: %p+%#lx, a %d-bit write into its own memory failed: %#x\n",
+             (unsigned)HandleToULong( NtCurrentTeb()->ClientId.UniqueProcess ), addr, (unsigned long)size,
+             ios_wow_base() ? 32 : 64, (unsigned)status );
 }
 #endif
 
@@ -39431,14 +39476,17 @@ NTSTATUS WINAPI NtWriteVirtualMemory( HANDLE process, void *addr, const void *bu
                                       SIZE_T size, SIZE_T *bytes_written )
 {
     unsigned int status;
-
 #ifdef WINE_IOS
-    /* madeira-bcd: a 32-bit program's write into its own window (ios_self_write). The pseudo-handle
+    const SIZE_T want = size;
+    int self_mode;
+
+    /* madeira-bcd: a program's write into its own memory (ios_self_write): a 32-bit program's into its own
+     * window, a 64-bit program's into its images and hook zone (ios_self_write_in_reach). The pseudo-handle
      * only, like NtReadVirtualMemory's branch above. A write that stops at its first page takes
      * the server request below, unchanged; the count is stored after every lock is dropped. */
-    if (process == NtCurrentProcess() && size && ios_self_write_enabled() &&
+    if (process == NtCurrentProcess() && size && (self_mode = ios_self_write_enabled()) &&
         (ULONG_PTR)addr + size - 1 >= (ULONG_PTR)addr &&
-        ios_wow_in_window( addr ) && ios_wow_in_window( (char *)addr + size - 1 ))
+        ios_self_write_in_reach( addr, size, self_mode ))
     {
         unsigned paths;
         SIZE_T done = ios_self_write( addr, buffer, size, &paths );
@@ -39469,6 +39517,9 @@ NTSTATUS WINAPI NtWriteVirtualMemory( HANDLE process, void *addr, const void *bu
         status = STATUS_PARTIAL_COPY;
         size = 0;
     }
+#ifdef WINE_IOS
+    if (status && process == NtCurrentProcess()) ios_self_write_server_log( addr, want, status );
+#endif
     if (bytes_written) *bytes_written = size;
     return status;
 }
