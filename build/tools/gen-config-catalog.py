@@ -686,6 +686,12 @@ OVERLAY = {
                 "note": "Default off. 1: after the first 8 GB of read-write reservations of 1 to 2 GB (no address given), each new one gets a real 63 MB head and the program is told it got "
                         "the full size; a commit that grows past the head fails and is logged ([thin] OVERFLOW). For a game that reserves dozens of 1 GB blocks and commits little of "
                         "each. Set it in the game's own file; read at session start."},
+    "env.MADEIRA_X64_HOOK_ZONE_MB": {"category": "Memory & JIT pool", "kind": "int", "default": "16",
+                "title": "Free room above a 64-bit program's ntdll for hook code (MB)",
+                "note": "16 by default; 0 turns it off; at most 256. A 64-bit program's ntdll gets this much free address space "
+                        "directly above it, which only a request for a fixed address uses, and its other DLLs go below it: a hook "
+                        "that needs its jump target within 2 GB of the function finds room there, as on Windows (Far Cry 4's "
+                        "FC64.dll searched upward from ntdll in vain and quit with 'Error at hooking'). Logged as [hook-zone]."},
     "env.MADEIRA_THIN_RESERVE_MB": {"category": "Memory & JIT pool", "kind": "int", "default": "64", "title": "Thin reservation: slot size (MB)",
                 "note": "With MADEIRA_THIN_RESERVE = 1: the stride of the thin heads, 16 to 512 MB; the real head is 1 MB less. 64 by default."},
     "env.MADEIRA_THIN_RESERVE_AFTER_GB": {"category": "Memory & JIT pool", "kind": "int", "default": "8", "title": "Thin reservation: GB reserved normally first",
