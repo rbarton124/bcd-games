@@ -8,7 +8,7 @@ STATUS_ACCESS_DENIED. Ubisoft Connect's upc.exe hooks its own ntdll, user32 and 
 WriteProcessMemory and ends with 0xdeadc0de; so does Far Cry 4's FC64.dll (64-bit), which hooks its own
 ntdll the same way. build/ntdll-unix/virtual_ios.c now does that write itself (ios_self_write), page by
 page, as a guest store would, and stops where Windows would. A 32-bit program writes inside its own window;
-a 64-bit program inside one of its image views, outside the session's 32-bit windows (ios_self_write_in_reach).
+a 64-bit program inside one of its image views or its hook zone, outside the 32-bit windows (ios_self_write_in_reach).
 
 What this checks, by cutting the real functions out of virtual_ios.c by signature (ios_self_write,
 its switch, its protect record and log lines, ios_self_write_in_reach, ios_wow_addr_in_any_window,
@@ -36,14 +36,15 @@ cannot be written or read is an error code, not a fault):
     destination ends up holding the count;
   - another process's handle, a 32-bit program's destination outside its window, or env.MADEIRA_SELF_WRITE = 0
     send the write to the server exactly as before;
-  - a 64-bit program: pages of an image view are written by the same rules (directly, through the pool view,
-    through the protect record); other memory, no view, a range past the view, a write into or crossing into a
+  - a 64-bit program: pages of an image view, or of a view inside its own hook zone (a trampoline), are written by
+    the same rules (directly, through the pool view, through the protect record); other memory, a range running out
+    of the zone, no view, a range past the view, a write into or crossing into a
     32-bit window or placeholder, and one longer than a window go to the server; env.MADEIRA_SELF_WRITE = 32 sends
     every 64-bit write to the server;
   - the log: one line for each process's first write, at most 16 lines in all for writes that stopped or
     used the protect record; a write into the program's own memory that the server refused: one line each, at
     most 16, with its bitness; another process's none;
-  - twelve deliberate breakages of the cut code still compile and are each caught.
+  - thirteen deliberate breakages of the cut code still compile and are each caught.
 And, by reading the sources: NtProtectVirtualMemory notes a successful change of its own process with the
 rounded range; the server's get_process_port and write_process_memory are untouched; CI runs this check;
 the catalog documents the switch.
@@ -215,6 +216,12 @@ static unsigned ios_wow_window_count, ios_wow_placeholder_count;
 #define SEC_IMAGE 0x1000000
 struct file_view { void *base; size_t size; unsigned protect; };
 static int view_kind;
+/* the calling 64-bit process's hook zone (virtual_ios.c ios_hook_zone_holds): pages zone_lo..zone_hi-1 */
+static int zone_lo, zone_hi;
+static int ios_hook_zone_holds( const char *a, SIZE_T n )
+{
+    return zone_hi && a >= G + zone_lo * PG && a + n <= G + zone_hi * PG;
+}
 static struct file_view *find_view( const void *a, size_t n )
 {
     static struct file_view v;
@@ -453,6 +460,13 @@ static void test_nt64( void )
     /* only inside an image view: other memory (a heap, a stack, FEX's allocations) and no view go to the server */
     view_kind = 1;
     T( NtWriteVirtualMemory( NtCurrentProcess(), P(1), data, 16, &n ) == STATUS_ACCESS_DENIED && n_server == 3 && P(1)[0] == 0x11 );
+    /* other memory inside the process's own hook zone (a trampoline FC64.dll writes with WriteProcessMemory): done here */
+    zone_lo = 0; zone_hi = 2;
+    T( NtWriteVirtualMemory( NtCurrentProcess(), P(1) + 8, data, 5, &n ) == STATUS_SUCCESS && n == 5 && n_server == 3 &&
+       !memcmp( P(1) + 8, data, 5 ) );
+    T( NtWriteVirtualMemory( NtCurrentProcess(), P(1) + 0xffc, data, 8, &n ) == STATUS_ACCESS_DENIED && n_server == 4 &&
+       P(2)[0] == 0x11 );                                                                        /* running out of the zone */
+    zone_hi = 0; n_server = 3;
     view_kind = 2;
     T( NtWriteVirtualMemory( NtCurrentProcess(), P(1), data, 16, &n ) == STATUS_ACCESS_DENIED && n_server == 4 && P(1)[0] == 0x11 );
     view_kind = 0;
@@ -555,8 +569,9 @@ BREAKS = [
     ("the host page not put back", [("                mprotect_range( at, len, 0, 0 );\n", "")]),
     ("a 64-bit write into a 32-bit window", [("        ios_wow_addr_in_any_window( addr ) || ios_wow_addr_in_any_window( addr + size - 1 )) return 0;",
                                               "        0) return 0;")]),
-    ("a 64-bit write outside an image", [("image = (view = find_view( addr, size )) && (view->protect & SEC_IMAGE);",
-                                          "image = 1; (void)view;")]),
+    ("a 64-bit write outside an image or its zone", [("own = (view = find_view( addr, size )) && ((view->protect & SEC_IMAGE) || ios_hook_zone_holds( addr, size ));",
+                                                      "own = 1; (void)view;")]),
+    ("any memory counts as the zone", [("|| ios_hook_zone_holds( addr, size ));", "|| 1);")]),
     ("a range longer than a window", [("mode != 1 || size > IOS_WOW_WINDOW_SIZE ||", "mode != 1 ||")]),
     ("a placeholder is not a window", [("        ULONG_PTR b = ios_wow_placeholders[i].base;", "        ULONG_PTR b = 0;")]),
     ("a 32-bit program writes outside its window", [("return ios_wow_in_window( addr ) && ios_wow_in_window( addr + size - 1 );",
@@ -655,7 +670,7 @@ check("the switch is read in one place, and the record only by these functions",
       src.count("ios_self_write(") == 2 and src.count("ios_self_write_note_protect(") == 2)
 check("the image test reads the view tree under virtual_mutex",
       "    server_enter_uninterrupted_section( &virtual_mutex, &sigset );\n"
-      "    image = (view = find_view( addr, size )) && (view->protect & SEC_IMAGE);\n"
+      "    own = (view = find_view( addr, size )) && ((view->protect & SEC_IMAGE) || ios_hook_zone_holds( addr, size ));\n"
       "    server_leave_uninterrupted_section( &virtual_mutex, &sigset );" in function(src, "static int ios_self_write_in_reach( const char *addr, SIZE_T size, int mode )"))
 check("the server's port and write path are untouched (writes into another process still refused)",
       "    return process->trace_data;\n}" in function(mach, "static mach_port_t get_process_port( struct process *process )") and
