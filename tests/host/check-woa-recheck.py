@@ -194,7 +194,10 @@ def build_and_run(src, tmp, name, sanitize):
     r = subprocess.run(flags + ["-o", str(exe), str(c)], capture_output=True, text=True)
     if r.returncode:
         return None, r.stderr
-    p = subprocess.run([str(exe)], capture_output=True, text=True, timeout=60)
+    try:
+        p = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20)
+    except subprocess.TimeoutExpired as e:   # a hang is a failure too (a broken queue can loop forever instead of faulting)
+        return subprocess.CompletedProcess(e.cmd, 124, "", "timed out after 20 s"), "timed out after 20 s"
     return p, p.stdout + p.stderr
 
 
