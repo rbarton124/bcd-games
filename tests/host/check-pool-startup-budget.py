@@ -50,10 +50,17 @@ helpers = ''.join(function(native, signature) for signature in (
     'static unsigned ios_tail_carves_merge(',
     'static unsigned ios_tail_carve_cut(',
     'static int ios_pool_carve_merge_enabled(',
+    'static int ios_pool_code_trim_enabled(',
+    'static time_t ios_pool_trim_asked(',
+    'static size_t ios_pool_trim_cap(',
+    'static int ios_pool_trim_pick(',
+    'static unsigned ios_pool_trim_idle(',
 ))
 carve_start = native.index('#define IOS_TAIL_CARVE_MAX ')
 carve_table = native[carve_start:native.index('\n\n', carve_start)] + '\n' + '\n'.join(
-    line for line in native.splitlines() if line.startswith(('#define IOS_POOL_FG_HOLD_SEC ', '#define IOS_POOL_FG_KEEP_FLOOR ', '#define IOS_POOL_CUT_MIN ')))
+    line for line in native.splitlines() if line.startswith(('#define IOS_POOL_FG_HOLD_SEC ', '#define IOS_POOL_FG_KEEP_FLOOR ', '#define IOS_POOL_CUT_MIN ',
+                                                             '#define IOS_POOL_TRIM_'))) + '\n' + \
+    native[native.index('struct ios_code_trim\n{'):native.index('static int ios_pool_code_trim_enabled(void)')]
 
 c_fixture = r'''
 #include <stdint.h>

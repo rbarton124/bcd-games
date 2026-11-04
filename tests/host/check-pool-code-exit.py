@@ -52,7 +52,18 @@ helpers = ''.join(function(signature) for signature in (
     'static unsigned ios_tail_carves_merge(',
     'static unsigned ios_tail_carve_cut(',
     'static int ios_pool_carve_merge_enabled(',
+    'static int ios_pool_code_trim_enabled(',
+    'void *ios_code_trim_control(',
+    'static void ios_code_trim_owner_died(',
+    'static int ios_pool_trim_pick(',
+    'static time_t ios_pool_trim_asked(',
+    'static size_t ios_pool_trim_cap(',
+    'static unsigned ios_pool_trim_idle(',
 ))
+# code-trim: the control block, its table and the policy's constants
+trim_table = source[source.index('struct ios_code_trim\n{'):source.index('static int ios_pool_code_trim_enabled(void)')]
+trim_defines = '\n'.join(line for line in source.splitlines() if line.startswith('#define IOS_POOL_TRIM_'))
+assert trim_defines.count('#define') == 5
 fg_defines = '\n'.join(line for line in source.splitlines()
                        if line.startswith(('#define IOS_POOL_FG_HOLD_SEC ', '#define IOS_POOL_FG_KEEP_FLOOR ', '#define IOS_POOL_CUT_MIN ')))
 assert fg_defines.count('#define') == 3
@@ -118,7 +129,7 @@ static size_t ios_jit_hole_off_eff, ios_jit_hole_end_eff, ios_jit_hole2_off, ios
 static int ios_jit_low_full_logged;
 static unsigned ios_tail_carve_n;
 static pthread_mutex_t ios_tail_carve_lock = PTHREAD_MUTEX_INITIALIZER;
-''' + carve_table + '\n' + fg_defines + r'''
+''' + carve_table + '\n' + fg_defines + '\n' + trim_table + trim_defines + r'''
 static uintptr_t owner;
 static int scan_busy, scans, occupied;
 static void *ios_jit_current_peb(void) { return (void *)owner; }
@@ -155,7 +166,7 @@ static int tail_carve(size_t *size_ptr, void **ret)
     ios_jit_tail_reserved = start + size;
     CHECK(ios_tail_carve_n + 1 + n <= IOS_TAIL_CARVE_MAX);
     ios_tail_carves[ios_tail_carve_n++] = (struct ios_tail_carve){ .off = total - start - size, .size = size,
-                                                                   .peb = (void *)owner, .fg = fixture_fg };
+                                                                   .peb = (void *)owner, .fg = fixture_fg, .granted_at = fake_now };
     for (k = 0; k < n; k++)
         if (ps[k] >= MB)
             ios_tail_carves[ios_tail_carve_n++] = (struct ios_tail_carve){ .off = po[k], .size = ps[k], .free = 1 };
@@ -606,6 +617,101 @@ static void merge_tests(void)
     fixture_fg = 0;
 }
 
+/* code-trim: 2026-11-04 in small. The budget cap is 16 MB; Ubisoft Connect's launcher (0xc00) and a renderer (0xc01) hold 64 MB
+ * each and made no buffer for 100 s, a utility (0xc02) holds 16 MB, a busy helper (0xc03) made one 5 s ago; the game (0xd00) runs
+ * on 16 MB. All took a control block. */
+static void trim_tests(void)
+{
+    struct ios_code_trim *upc, *ren, *small, *busy, *game;
+    void *rx, *addr;
+    size_t size;
+    unsigned i;
+
+    tight();
+    memset(ios_code_trims, 0, sizeof(ios_code_trims));
+    fake_now = 200;
+    ios_tail_carves[0] = (struct ios_tail_carve){ .off = 0x20000000, .size = 32 * MB, .peb = (void *)0xc00, .granted_at = 100 };
+    ios_tail_carves[1] = (struct ios_tail_carve){ .off = 0x22000000, .size = 32 * MB, .peb = (void *)0xc00, .granted_at = 90 };
+    ios_tail_carves[2] = (struct ios_tail_carve){ .off = 0x24000000, .size = 32 * MB, .peb = (void *)0xc01, .granted_at = 80 };
+    ios_tail_carves[3] = (struct ios_tail_carve){ .off = 0x26000000, .size = 32 * MB, .peb = (void *)0xc01, .granted_at = 85 };
+    ios_tail_carves[4] = (struct ios_tail_carve){ .off = 0x28000000, .size = 16 * MB, .peb = (void *)0xc02, .granted_at = 50 };
+    ios_tail_carves[5] = (struct ios_tail_carve){ .off = 0x29000000, .size = 32 * MB, .peb = (void *)0xc03, .granted_at = 195 };
+    ios_tail_carves[6] = (struct ios_tail_carve){ .off = 0x2b000000, .size = 16 * MB, .peb = (void *)0xd00, .granted_at = 190, .fg = 1 };
+    ios_tail_carve_n = 7;
+    upc = ios_code_trim_control((void *)0xc00); ren = ios_code_trim_control((void *)0xc01);
+    small = ios_code_trim_control((void *)0xc02); busy = ios_code_trim_control((void *)0xc03);
+    game = ios_code_trim_control((void *)0xd00);
+    CHECK(upc && ren && small && busy && game && upc->magic == IOS_CODE_TRIM_MAGIC);
+
+    /* a helper refused asks nobody; the game refused 128 MB asks the two idle 64 MB holders, for 8 MB each */
+    owner = 0xc03; fixture_fg = 0;
+    size = 128 * MB;
+    CHECK(allocate(&size, &rx) == STATUS_NO_MEMORY && !upc->request && !ren->request);
+    owner = 0xd00; fixture_fg = 1;
+    size = 128 * MB;
+    CHECK(allocate(&size, &rx) == STATUS_NO_MEMORY);
+    CHECK(upc->request == 1 && ren->request == 1 && upc->size_mb == 8 && ren->size_mb == 8);
+    CHECK(!small->request && !busy->request && !game->request);             /* too small; not idle; the game itself */
+    fake_now = 201;
+    size = 64 * MB;
+    CHECK(allocate(&size, &rx) == STATUS_NO_MEMORY && upc->request == 1 && ren->request == 1);   /* not asked again within 60 s */
+    puts("PASS: code-trim: the game's refusal asks the idle programs holding 24 MB or more for 8 MB; not the small, the busy, the game; once a minute");
+
+    /* their FEX trims: the buffers they free merge and are held for the game, which then gets 128 MB */
+    fake_now = 205;
+    owner = 0xc00;
+    CHECK(release(pool + 0x20000000, MEM_RELEASE, &addr, &size) == STATUS_SUCCESS);
+    CHECK(release(pool + 0x22000000, MEM_RELEASE, &addr, &size) == STATUS_SUCCESS);
+    owner = 0xc01;
+    CHECK(release(pool + 0x24000000, MEM_RELEASE, &addr, &size) == STATUS_SUCCESS);
+    CHECK(release(pool + 0x26000000, MEM_RELEASE, &addr, &size) == STATUS_SUCCESS);
+    i = find(0x20000000);
+    CHECK(i != ~0u && ios_tail_carves[i].size == 128 * MB && ios_tail_carves[i].free && ios_tail_carves[i].fg);
+    owner = 0xc02; fixture_fg = 0;
+    size = 32 * MB;
+    CHECK(allocate(&size, &rx) == STATUS_NO_MEMORY);                        /* held: not for another program */
+    owner = 0xd00; fixture_fg = 1;
+    CHECK(fex_ask(0xd00, 128 * MB, &rx) == 128 * MB && off_of(rx) == 0x20000000);
+    puts("PASS: code-trim: what the asked programs free merges into a run held for the game; its next buffer is 128 MB");
+
+    /* an asked program stays at 8 MB while the game runs; once the game's buffers are gone, pool-fg's caps apply again */
+    owner = 0xc00; fixture_fg = 0;
+    CHECK(ios_pool_trim_cap(32 * MB, 0, (void *)0xc00) == 8 * MB && ios_pool_trim_cap(32 * MB, 1, (void *)0xc00) == 32 * MB);
+    CHECK(ios_pool_trim_cap(32 * MB, 0, (void *)0xc02) == 32 * MB);        /* never asked */
+    size = 16 * MB;
+    CHECK(allocate(&size, &rx) == STATUS_NO_MEMORY);
+    size = 8 * MB;
+    CHECK(allocate(&size, &rx) == FALLBACK_TAIL);
+    /* a free 128 MB run nobody holds lifts no cap for it: 128 MB is refused, 8 MB is cut from the run */
+    ios_tail_carves[ios_tail_carve_n++] = (struct ios_tail_carve){ .off = 0x30000000, .size = 128 * MB, .free = 1, .freed_at = 150 };
+    size = 128 * MB;
+    CHECK(allocate(&size, &rx) == STATUS_NO_MEMORY);
+    size = 8 * MB;
+    CHECK(allocate(&size, &rx) == STATUS_SUCCESS && size == 8 * MB && off_of(rx) == 0x30000000 + 120 * MB);
+    /* what it got after the request (its trim's probe, its new generation) is not held when freed */
+    CHECK(release(rx, MEM_RELEASE, &addr, &size) == STATUS_SUCCESS && !ios_tail_carves[find(0x30000000)].fg);
+    {
+        size_t bytes;
+        pthread_mutex_lock(&ios_tail_carve_lock);
+        ios_tail_carves_retire_owner(ios_tail_carves, ios_tail_carve_n, (void *)0xd00, 300, &bytes);
+        pthread_mutex_unlock(&ios_tail_carve_lock);
+    }
+    CHECK(ios_pool_trim_cap(32 * MB, 0, (void *)0xc00) == 32 * MB);
+    puts("PASS: code-trim: an asked program is held to 8 MB while the game runs, and only then");
+
+    /* a program that ends gives its block back; a request older than 30 s no longer holds what is freed */
+    ios_code_trim_owner_died((void *)0xc00);
+    CHECK(!ios_pool_trim_asked((void *)0xc00) && ios_code_trim_control((void *)0xe00) == upc && !upc->request);
+    for (i = 0; i < IOS_CODE_TRIM_MAX && ios_code_trims[i].peb != (void *)0xc03; i++) ;
+    CHECK(i < IOS_CODE_TRIM_MAX);
+    ios_code_trims[i].asked_at = 360;                                       /* asked at 360, frees at 400 */
+    fake_now = 400;
+    owner = 0xc03;
+    CHECK(release(pool + 0x29000000, MEM_RELEASE, &addr, &size) == STATUS_SUCCESS && !ios_tail_carves[find(0x29000000)].fg);
+    puts("PASS: code-trim: an ended program's block is reused fresh; what is freed long after a request is not held");
+    fixture_fg = 0;
+}
+
 int main(int argc, char **argv)
 {
     void *p = NULL;
@@ -614,6 +720,18 @@ int main(int argc, char **argv)
     CHECK(!posix_memalign(&p, 0x4000, 0x38000000 + 0x71d0000));
     pool = p;
     low = pool + 0x38000000;
+    if (argc > 1 && !strcmp(argv[1], "trim"))
+    {
+        if (getenv("MADEIRA_POOL_CODE_TRIM"))
+        {   /* = 0: no block, so no request */
+            CHECK(!ios_code_trim_control((void *)0xc00));
+            puts("PASS: code-trim: MADEIRA_POOL_CODE_TRIM=0 offers no control block");
+        }
+        else
+            trim_tests();
+        free(p);
+        return 0;
+    }
     if (argc > 1 && !strcmp(argv[1], "merge"))
     {
         merge_tests();
@@ -642,9 +760,10 @@ with tempfile.TemporaryDirectory(prefix='madeira-pool-code-exit-') as directory:
                     '-fno-omit-frame-pointer', '-pthread', str(cfile), '-o', str(binary)], check=True)
     # The allocator's own log lines go to stderr; show them only on failure. The scenarios above were written before pool-merge:
     # they run with it off (its switch restores exactly that behaviour); pool-merge's own scenarios run with the default.
-    for args, env in (([], {'MADEIRA_POOL_CARVE_MERGE': '0'}), (['merge'], {})):
+    for args, env in (([], {'MADEIRA_POOL_CARVE_MERGE': '0'}), (['merge'], {}), (['trim'], {}), (['trim'], {'MADEIRA_POOL_CODE_TRIM': '0'})):
         completed = subprocess.run([str(binary)] + args, capture_output=True, text=True,
-                                   env={**{k: v for k, v in os.environ.items() if k != 'MADEIRA_POOL_CARVE_MERGE'}, **env})
+                                   env={**{k: v for k, v in os.environ.items()
+                                           if k not in ('MADEIRA_POOL_CARVE_MERGE', 'MADEIRA_POOL_CODE_TRIM')}, **env})
         print(completed.stdout, end='')
         if completed.returncode:
             print(completed.stderr, end='')
