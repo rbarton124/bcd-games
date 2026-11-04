@@ -46,14 +46,19 @@ helpers = ''.join(function(native, signature) for signature in (
     'static int ios_pool_fg_held(',
     'static size_t ios_pool_free_room(',
     'static int ios_pool_fg_keep_size(',
+    'static int ios_tail_carve_mergeable(',
+    'static unsigned ios_tail_carves_merge(',
+    'static unsigned ios_tail_carve_cut(',
+    'static int ios_pool_carve_merge_enabled(',
 ))
 carve_start = native.index('#define IOS_TAIL_CARVE_MAX ')
 carve_table = native[carve_start:native.index('\n\n', carve_start)] + '\n' + '\n'.join(
-    line for line in native.splitlines() if line.startswith(('#define IOS_POOL_FG_HOLD_SEC ', '#define IOS_POOL_FG_KEEP_FLOOR ')))
+    line for line in native.splitlines() if line.startswith(('#define IOS_POOL_FG_HOLD_SEC ', '#define IOS_POOL_FG_KEEP_FLOOR ', '#define IOS_POOL_CUT_MIN ')))
 
 c_fixture = r'''
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 #include <stdlib.h>
 #include <pthread.h>
 #include <unistd.h>
@@ -87,6 +92,7 @@ static void *ios_jit_current_peb(void) { return (void *)(uintptr_t)1; }
 static int ios_tail_carve_scan(const void *base, size_t size, int strict)
 { (void)base; (void)size; (void)strict; return 0; }
 ''' + helpers + r'''
+__attribute__((unused)) static unsigned (*const keep_merge)(struct ios_tail_carve *, unsigned *, unsigned) = ios_tail_carves_merge;  /* release side, not in this fixture */
 static int racing_low_take(volatile size_t *used, size_t total, size_t want, size_t *off)
 {
     if (lose_race) {
@@ -311,7 +317,9 @@ with tempfile.TemporaryDirectory(prefix='madeira-pool-startup-') as directory:
     subprocess.run([os.environ.get('CC', 'cc'), '-std=c11', '-D_POSIX_C_SOURCE=200809L',
                     '-Wall', '-Wextra', '-Werror', '-fsanitize=address,undefined',
                     '-fno-omit-frame-pointer', '-pthread', str(cfile), '-o', str(binary)], check=True)
-    result = subprocess.run([str(binary)], capture_output=True, text=True)
+    # Region C's policy with whole carves; pool-merge's cutting is checked by check-pool-code-exit.py (its switch off restores this).
+    result = subprocess.run([str(binary)], capture_output=True, text=True,
+                            env={**os.environ, 'MADEIRA_POOL_CARVE_MERGE': '0'})
     print(result.stdout, end='')
     if result.returncode:
         print(result.stderr, end='')

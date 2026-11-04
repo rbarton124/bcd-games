@@ -152,6 +152,13 @@ OVERLAY = {
                         "pool: reusable 3 seconds later, once no thread runs in them. Before, they stayed in use "
                         "until Madeira closed, and a game started after many such exits got 16 MB code buffers and "
                         "ran slowly. 0 keeps them in use, as before."},
+    # madeira-bcd pool-merge (build/ntdll-unix/virtual_ios.c ios_tail_carves_merge / ios_tail_carve_cut).
+    "env.MADEIRA_POOL_CARVE_MERGE": {"category": "Memory & JIT pool", "title": "Merge and cut free code buffers",
+                "kind": "bool", "default": "1",
+                "note": "On by default. A code buffer FEX gives back merges with the free buffers beside it, and a free "
+                        "buffer larger than a request is cut to its size (the rest stays free). Before, free buffers "
+                        "never merged, so the pool could refuse one 128 MB buffer with hundreds of MB free in pieces, "
+                        "and a 16 KB request took a whole free 16-32 MB buffer. 0 turns both off. Read once per session."},
     "env.MADEIRA_POOL_CODE_FOREGROUND": {"category": "Memory & JIT pool", "title": "Larger code buffers for the program you launched",
                 "kind": "bool", "default": "1",
                 "note": "On by default. Every program of the session other than the one you launched (a launcher, its "

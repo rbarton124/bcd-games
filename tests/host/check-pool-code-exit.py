@@ -48,10 +48,14 @@ helpers = ''.join(function(signature) for signature in (
     'static int ios_pool_fg_held(',
     'static size_t ios_pool_free_room(',
     'static int ios_pool_fg_keep_size(',
+    'static int ios_tail_carve_mergeable(',
+    'static unsigned ios_tail_carves_merge(',
+    'static unsigned ios_tail_carve_cut(',
+    'static int ios_pool_carve_merge_enabled(',
 ))
 fg_defines = '\n'.join(line for line in source.splitlines()
-                       if line.startswith(('#define IOS_POOL_FG_HOLD_SEC ', '#define IOS_POOL_FG_KEEP_FLOOR ')))
-assert fg_defines.count('#define') == 2
+                       if line.startswith(('#define IOS_POOL_FG_HOLD_SEC ', '#define IOS_POOL_FG_KEEP_FLOOR ', '#define IOS_POOL_CUT_MIN ')))
+assert fg_defines.count('#define') == 3
 carve_start = source.index('#define IOS_TAIL_CARVE_MAX ')
 carve_table = source[carve_start:source.index('\n\n', carve_start)]
 ec = source[source.index('size_t alloc_size = (*size_ptr + 0x3FFF) & ~0x3FFFUL;'):]
@@ -463,7 +467,146 @@ static size_t keep(int fg_on)
     return 32 * MB;
 }
 
-int main(void)
+/* pool-merge (default on): the same allocator path with released carves merging and free carves cut to the size asked. The budget
+ * cap is 16 MB (keep()'s numbers), region C is full, so every grant above 16 MB must come from the free-list. */
+static unsigned find(size_t off)
+{
+    unsigned i;
+    for (i = 0; i < ios_tail_carve_n; i++) if (ios_tail_carves[i].off == off) return i;
+    return ~0u;
+}
+static void tight(void)
+{
+    reset();
+    ios_pool_head_reserve = 48 * MB;
+    ios_jit_low_reserved = ios_jit_low_size_global;
+    jit_pool_offset = 0x10000000;
+    ios_jit_tail_reserved = 0x24600000;
+    fixture_fg = 0;
+    fake_now = 100;
+}
+static void merge_tests(void)
+{
+    void *rx, *addr;
+    size_t size;
+    unsigned i;
+
+    /* three adjacent buffers of one process, released in any order, become one 64 MB run; a dead process's free buffer beside
+     * them stays apart */
+    tight();
+    ios_tail_carves[0] = (struct ios_tail_carve){ .off = 0x21000000, .size = 32 * MB, .peb = (void *)0x500 };
+    ios_tail_carves[1] = (struct ios_tail_carve){ .off = 0x20000000, .size = 16 * MB, .peb = (void *)0x500 };
+    ios_tail_carves[2] = (struct ios_tail_carve){ .off = 0x23000000, .size = 16 * MB, .peb = (void *)0x500, .fg = 1 };
+    ios_tail_carves[3] = (struct ios_tail_carve){ .off = 0x24000000, .size = 16 * MB, .free = 1, .retired = 1, .freed_at = 50 };
+    ios_tail_carve_n = 4;
+    owner = 0x500;
+    CHECK(release(pool + 0x21000000, MEM_RELEASE, &addr, &size) == STATUS_SUCCESS && size == 32 * MB && ios_tail_carve_n == 4);
+    fake_now = 101;
+    CHECK(release(pool + 0x20000000, MEM_RELEASE, &addr, &size) == STATUS_SUCCESS && size == 16 * MB && ios_tail_carve_n == 3);
+    fake_now = 102;
+    CHECK(release(pool + 0x23000000, MEM_RELEASE, &addr, &size) == STATUS_SUCCESS && size == 16 * MB && ios_tail_carve_n == 2);
+    i = find(0x20000000);
+    CHECK(i != ~0u && ios_tail_carves[i].size == 64 * MB && ios_tail_carves[i].free && !ios_tail_carves[i].retired);
+    CHECK(ios_tail_carves[i].freed_at == 102 && ios_tail_carves[i].fg == 1);       /* the latest release; the game's hold */
+    i = find(0x24000000);
+    CHECK(i != ~0u && ios_tail_carves[i].retired && ios_tail_carves[i].size == 16 * MB);
+    puts("PASS: pool-merge: released neighbours form one run (latest release time, the game's hold kept); a dead process's stays apart");
+
+    /* a 128 MB request is served from a 160 MB run although the budget cap is 16 MB; its release merges the run again */
+    tight();
+    ios_tail_carves[0] = (struct ios_tail_carve){ .off = 0x20000000, .size = 160 * MB, .free = 1, .freed_at = 90 };
+    ios_tail_carve_n = 1;
+    owner = 0x600;
+    size = 128 * MB;
+    CHECK(allocate(&size, &rx) == STATUS_SUCCESS && size == 128 * MB && off_of(rx) == 0x22000000);
+    CHECK(ios_tail_carve_n == 2 && ios_tail_carves[0].off == 0x20000000 && ios_tail_carves[0].size == 32 * MB && ios_tail_carves[0].free);
+    CHECK(!ios_tail_carves[1].free && ios_tail_carves[1].peb == (void *)0x600 && ios_jit_tail_reserved == 0x24600000);
+    CHECK(((volatile uint32_t *)rx)[0] == 0xd503201fu && ((volatile uint32_t *)rx)[32 * MB - 1] == 0xd503201fu);
+    CHECK(release(rx, MEM_RELEASE, &addr, &size) == STATUS_SUCCESS && size == 128 * MB);
+    CHECK(ios_tail_carve_n == 1 && ios_tail_carves[0].off == 0x20000000 && ios_tail_carves[0].size == 160 * MB);
+    puts("PASS: pool-merge: a 128 MB buffer is cut from a free 160 MB run (the tail cursor untouched) and merges back when released");
+
+    /* the 2026-11-04 refusal: two adjacent free 16 MB carves of two processes; FEX's ladder (128, 64, 32) now gets 32 MB */
+    tight();
+    ios_tail_carves[0] = (struct ios_tail_carve){ .off = 0x20000000, .size = 16 * MB, .peb = (void *)0x700 };
+    ios_tail_carves[1] = (struct ios_tail_carve){ .off = 0x21000000, .size = 16 * MB, .peb = (void *)0x701 };
+    ios_tail_carve_n = 2;
+    owner = 0x700;
+    CHECK(release(pool + 0x20000000, MEM_RELEASE, &addr, &size) == STATUS_SUCCESS);
+    owner = 0x701;
+    CHECK(release(pool + 0x21000000, MEM_RELEASE, &addr, &size) == STATUS_SUCCESS && ios_tail_carve_n == 1);
+    CHECK(fex_ask(0x702, 128 * MB, &rx) == 32 * MB && off_of(rx) == 0x20000000 && ios_jit_tail_reserved == 0x24600000);
+    puts("PASS: pool-merge: the game's refused 32 MB of 2026-11-04 (two adjacent free 16 MB carves) is granted");
+
+    /* a 16 KB dispatcher request takes 16 KB of a free 32 MB carve, not all of it; its release merges back */
+    tight();
+    ios_tail_carves[0] = (struct ios_tail_carve){ .off = 0x20000000, .size = 32 * MB, .free = 1 };
+    ios_tail_carve_n = 1;
+    owner = 0x800;
+    size = 0x4000;
+    CHECK(allocate(&size, &rx) == STATUS_SUCCESS && size == 0x4000 && off_of(rx) == 0x22000000 - 0x4000);
+    CHECK(ios_tail_carves[0].size == 32 * MB - 0x4000 && ios_tail_carves[0].free);
+    CHECK(release(rx, MEM_RELEASE, &addr, &size) == STATUS_SUCCESS && ios_tail_carve_n == 1 && ios_tail_carves[0].size == 32 * MB);
+    /* a carve less than 1 MB larger is handed out whole */
+    ios_tail_carves[0].size = 0x4000 + 0xfc000;
+    size = 0x4000;
+    CHECK(allocate(&size, &rx) == STATUS_SUCCESS && size == 0x100000 && ios_tail_carve_n == 1);
+    puts("PASS: pool-merge: a 16 KB request takes 16 KB of a free 32 MB carve and gives it back; under 1 MB extra is handed out whole");
+
+    /* a full table cuts nothing (the whole carve, as before) */
+    tight();
+    for (i = 0; i < IOS_TAIL_CARVE_MAX - 1; i++)
+        ios_tail_carves[i] = (struct ios_tail_carve){ .off = 0x30000000 + i * 0x4000, .size = 0x4000, .peb = (void *)0x900 };
+    ios_tail_carves[i] = (struct ios_tail_carve){ .off = 0x20000000, .size = 32 * MB, .free = 1 };
+    ios_tail_carve_n = IOS_TAIL_CARVE_MAX;
+    owner = 0x901;
+    size = 0x4000;
+    CHECK(allocate(&size, &rx) == STATUS_SUCCESS && size == 32 * MB && ios_tail_carve_n == IOS_TAIL_CARVE_MAX);
+    puts("PASS: pool-merge: with the carve table full the whole carve is handed out");
+
+    /* a dead process's 64 MB buffer, cut for a 32 MB request after its grace and scan: the rest stays retired and does not merge
+     * with the piece when the piece is released */
+    tight();
+    ios_tail_carves[0] = (struct ios_tail_carve){ .off = 0x20000000, .size = 64 * MB, .free = 1, .retired = 1, .freed_at = 90 };
+    ios_tail_carve_n = 1;
+    owner = 0xa00;
+    scans = 0;
+    size = 32 * MB;
+    CHECK(allocate(&size, &rx) == STATUS_SUCCESS && size == 32 * MB && scans == 1 && off_of(rx) == 0x22000000);
+    CHECK(ios_tail_carves[0].retired && ios_tail_carves[0].size == 32 * MB && !ios_tail_carves[1].retired);
+    CHECK(release(rx, MEM_RELEASE, &addr, &size) == STATUS_SUCCESS && ios_tail_carve_n == 2);
+    owner = 0xa01;                                              /* another process's late release of the piece: refused */
+    CHECK(release(rx, MEM_RELEASE, &addr, &size) == FALL_THROUGH);
+    puts("PASS: pool-merge: a dead process's buffer is cut only after its grace and scan; its rest stays retired and apart");
+
+    /* the game's hold covers a merged run: another program may not take it for 30 s */
+    tight();
+    ios_tail_carves[0] = (struct ios_tail_carve){ .off = 0x20000000, .size = 32 * MB, .free = 1, .freed_at = 100, .fg = 1 };
+    ios_tail_carves[1] = (struct ios_tail_carve){ .off = 0x22000000, .size = 32 * MB, .peb = (void *)0xb00 };
+    ios_tail_carve_n = 2;
+    owner = 0xb00;
+    CHECK(release(pool + 0x22000000, MEM_RELEASE, &addr, &size) == STATUS_SUCCESS && ios_tail_carve_n == 1 && ios_tail_carves[0].fg);
+    owner = 0xb01;
+    size = 32 * MB;
+    CHECK(allocate(&size, &rx) == STATUS_NO_MEMORY);
+    fixture_fg = 1;
+    size = 64 * MB;
+    CHECK(allocate(&size, &rx) == STATUS_SUCCESS && size == 64 * MB);
+    puts("PASS: pool-merge: a run that holds a buffer the game freed stays held for it");
+
+    /* region C begins where this fixture's pool ends: the pool's top carve and C's first one touch but never merge */
+    tight();
+    ios_tail_carves[0] = (struct ios_tail_carve){ .off = 0x37000000, .size = 16 * MB, .free = 1 };
+    ios_tail_carves[1] = (struct ios_tail_carve){ .off = 0x38000000, .size = 16 * MB, .peb = (void *)0xb10 };
+    ios_tail_carve_n = 2;
+    owner = 0xb10;
+    CHECK(ios_tail_carve_in_low(0x38000000) && !ios_tail_carve_in_low(0x37000000));
+    CHECK(release(low, MEM_RELEASE, &addr, &size) == STATUS_SUCCESS && ios_tail_carve_n == 2);
+    puts("PASS: pool-merge: a carve of region C and one of the pool never merge, even where they touch");
+    fixture_fg = 0;
+}
+
+int main(int argc, char **argv)
 {
     void *p = NULL;
     size_t off, on;
@@ -471,6 +614,12 @@ int main(void)
     CHECK(!posix_memalign(&p, 0x4000, 0x38000000 + 0x71d0000));
     pool = p;
     low = pool + 0x38000000;
+    if (argc > 1 && !strcmp(argv[1], "merge"))
+    {
+        merge_tests();
+        free(p);
+        return 0;
+    }
     unit();
     CHECK(keep(0) == 16 * MB && keep(1) == 32 * MB);
     puts("PASS: pool-fg-keep: without the class (MADEIRA_POOL_CODE_FOREGROUND=0) the game gets 16 MB, as on 2026-11-04");
@@ -491,9 +640,12 @@ with tempfile.TemporaryDirectory(prefix='madeira-pool-code-exit-') as directory:
     subprocess.run([os.environ.get('CC', 'cc'), '-std=c11', '-D_POSIX_C_SOURCE=200809L',
                     '-Wall', '-Wextra', '-Werror', '-fsanitize=address,undefined', '-fno-sanitize-recover=undefined',
                     '-fno-omit-frame-pointer', '-pthread', str(cfile), '-o', str(binary)], check=True)
-    # The allocator's own log lines go to stderr; show them only on failure.
-    completed = subprocess.run([str(binary)], capture_output=True, text=True)
-    print(completed.stdout, end='')
-    if completed.returncode:
-        print(completed.stderr, end='')
-        completed.check_returncode()
+    # The allocator's own log lines go to stderr; show them only on failure. The scenarios above were written before pool-merge:
+    # they run with it off (its switch restores exactly that behaviour); pool-merge's own scenarios run with the default.
+    for args, env in (([], {'MADEIRA_POOL_CARVE_MERGE': '0'}), (['merge'], {})):
+        completed = subprocess.run([str(binary)] + args, capture_output=True, text=True,
+                                   env={**{k: v for k, v in os.environ.items() if k != 'MADEIRA_POOL_CARVE_MERGE'}, **env})
+        print(completed.stdout, end='')
+        if completed.returncode:
+            print(completed.stderr, end='')
+            completed.check_returncode()
