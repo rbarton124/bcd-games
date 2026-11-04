@@ -643,7 +643,8 @@ else:
                   r.returncode == 0 and len(log) == 16 and
                   log[0] == "[self-write] pid 0030: %s+0x10, a 32-bit write into its own memory failed: 0xc0000022"
                   % log[0].split(" ")[3].split("+")[0] and
-                  all(", a 64-bit write into its own memory failed: 0xc0000022 (view " in l and "; caller peb 0x7000, hook zone (nil)+0" in l
+                  all(", a 64-bit write into its own memory failed: 0xc0000022 (view " in l and
+                      ("; caller peb 0x7000, hook zone (nil)+0" in l or "; caller peb 0x7000, hook zone 0x0+0" in l)   # glibc / macOS %p of NULL
                       for l in log[1:]) and "(view " not in log[0],
                   "\n".join(log) + r.stdout)
             r = run(exe, "off", MADEIRA_SELF_WRITE="0")
