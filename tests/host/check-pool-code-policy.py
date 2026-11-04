@@ -44,7 +44,7 @@ helper = function("static size_t ios_pool_fg_adjust(")
 # the call site keeps the production call text unchanged (check-pool-split.py pins it) and adds the class step after it
 call = SRC[SRC.index("size_t cap = ios_pool_code_cap( ios_jit_pool_size_global, head_now, tail_now,"):][:2600]
 check("the original budget call is untouched and the class step follows it, once",
-      "ios_pool_head_reserve +\n" in call and "cap = ios_pool_fg_adjust( cap, head_now, tail_now );" in call
+      "ios_pool_head_reserve +\n" in call and "cap = ios_pool_fg_adjust( cap, head_now, tail_now, &carve_fg );" in call
       and call.index("budget_cap = cap;") > call.index("ios_pool_fg_adjust(") and SRC.count("ios_pool_fg_adjust( cap,") == 1)
 check("the helper reads the app's folder and the one off switch, and takes the image path from the caller's own PEB",
       'getenv( "BCD_GAME_FOLDER" )' in helper and 'getenv( "MADEIRA_POOL_CODE_FOREGROUND" )' in helper
@@ -96,6 +96,7 @@ HARNESS = r'''
 #include <stdlib.h>
 #include <string.h>
 #include <stddef.h>
+#include <time.h>
 #include <unistd.h>
 typedef unsigned short WCHAR;
 typedef unsigned short USHORT;
@@ -135,6 +136,7 @@ static int inside( const char *folder, const char *path )
 }
 static int pid_fixed;
 /* the production helper as the caller sees it: `path` is the calling process's image, NULL for no PEB */
+static int last_fg = -1;   /* pool-fg-keep: the class ios_pool_fg_adjust reported */
 static size_t adjusted( const char *folder, const char *off, const char *path, size_t head, size_t tail )
 {
     static RTL_USER_PROCESS_PARAMETERS pp;
@@ -148,7 +150,7 @@ static size_t adjusted( const char *folder, const char *off, const char *path, s
     current = path ? &peb : NULL;
     if (!pid_fixed) current_pid = path ? 0x100 + (ULONG)strlen( path ) : 0;   /* one process per program (the same PEB, as a reused window) */
     budget = ios_pool_code_cap( TOTAL, head, tail, HO, HE, ios_pool_head_reserve );
-    return ios_pool_fg_adjust( budget, head, tail );
+    return ios_pool_fg_adjust( budget, head, tail, &last_fg );
 }
 int main( void )
 {
@@ -209,6 +211,11 @@ int main( void )
     T( adjusted( fc3, "0", game, 0x13fd0000, 0x20410000 ) == 16 * MB );
     T( adjusted( fc3, "1", upc, 0x124ac000, 0x08000000 ) == 32 * MB );           /* any other value: on */
     T( adjusted( fc3, NULL, NULL, 0x124ac000, 0x08000000 ) == 32 * MB );         /* no PEB: another program */
+    /* pool-fg-keep: the class is reported to the allocator (its carves are held and keep their size only for the game) */
+    adjusted( fc3, NULL, game, 0x13fd0000, 0x20410000 ); T( last_fg == 1 );
+    adjusted( fc3, NULL, upc, 0x13fd0000, 0x20410000 ); T( last_fg == 0 );
+    adjusted( fc3, "0", game, 0x13fd0000, 0x20410000 ); T( last_fg == 0 );     /* the off switch: no class */
+    adjusted( NULL, NULL, game, 0x13fd0000, 0x20410000 ); T( last_fg == 0 );   /* no folder: no class */
     /* one line per process: the same process again writes none; a new process in the same window (same PEB) writes its own */
     {
         int i;
