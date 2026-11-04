@@ -222,6 +222,13 @@ static int ios_hook_zone_holds( const char *a, SIZE_T n )
 {
     return zone_hi && a >= G + zone_lo * PG && a + n <= G + zone_hi * PG;
 }
+static int ios_hook_zone_of_caller( ULONG_PTR *base, ULONG_PTR *size )
+{
+    *base = zone_hi ? (ULONG_PTR)(G + zone_lo * PG) : 0;
+    *size = zone_hi ? (ULONG_PTR)(zone_hi - zone_lo) * PG : 0;
+    return zone_hi != 0;
+}
+static void *ios_jit_current_peb( void ) { return (void *)0x7000; }
 static struct file_view *find_view( const void *a, size_t n )
 {
     static struct file_view v;
@@ -466,6 +473,10 @@ static void test_nt64( void )
        !memcmp( P(1) + 8, data, 5 ) );
     T( NtWriteVirtualMemory( NtCurrentProcess(), P(1) + 0xffc, data, 8, &n ) == STATUS_ACCESS_DENIED && n_server == 4 &&
        P(2)[0] == 0x11 );                                                                        /* running out of the zone */
+    /* the zone qualifies without a view lookup (the page rules still decide; here the page table says writable) */
+    view_kind = 2;
+    T( NtWriteVirtualMemory( NtCurrentProcess(), P(1) + 16, data, 4, &n ) == STATUS_SUCCESS && n_server == 4 );
+    view_kind = 0;
     zone_hi = 0; n_server = 3;
     view_kind = 2;
     T( NtWriteVirtualMemory( NtCurrentProcess(), P(1), data, 16, &n ) == STATUS_ACCESS_DENIED && n_server == 4 && P(1)[0] == 0x11 );
@@ -569,9 +580,9 @@ BREAKS = [
     ("the host page not put back", [("                mprotect_range( at, len, 0, 0 );\n", "")]),
     ("a 64-bit write into a 32-bit window", [("        ios_wow_addr_in_any_window( addr ) || ios_wow_addr_in_any_window( addr + size - 1 )) return 0;",
                                               "        0) return 0;")]),
-    ("a 64-bit write outside an image or its zone", [("own = (view = find_view( addr, size )) && ((view->protect & SEC_IMAGE) || ios_hook_zone_holds( addr, size ));",
+    ("a 64-bit write outside an image or its zone", [("own = ios_hook_zone_holds( addr, size ) || ((view = find_view( addr, size )) && (view->protect & SEC_IMAGE));",
                                                       "own = 1; (void)view;")]),
-    ("any memory counts as the zone", [("|| ios_hook_zone_holds( addr, size ));", "|| 1);")]),
+    ("any memory counts as the zone", [("own = ios_hook_zone_holds( addr, size ) ||", "own = 1 ||")]),
     ("a range longer than a window", [("mode != 1 || size > IOS_WOW_WINDOW_SIZE ||", "mode != 1 ||")]),
     ("a placeholder is not a window", [("        ULONG_PTR b = ios_wow_placeholders[i].base;", "        ULONG_PTR b = 0;")]),
     ("a 32-bit program writes outside its window", [("return ios_wow_in_window( addr ) && ios_wow_in_window( addr + size - 1 );",
@@ -632,7 +643,8 @@ else:
                   r.returncode == 0 and len(log) == 16 and
                   log[0] == "[self-write] pid 0030: %s+0x10, a 32-bit write into its own memory failed: 0xc0000022"
                   % log[0].split(" ")[3].split("+")[0] and
-                  all(", a 64-bit write into its own memory failed: 0xc0000022" in l for l in log[1:]),
+                  all(", a 64-bit write into its own memory failed: 0xc0000022 (view " in l and "; caller peb 0x7000, hook zone (nil)+0" in l
+                      for l in log[1:]) and "(view " not in log[0],
                   "\n".join(log) + r.stdout)
             r = run(exe, "off", MADEIRA_SELF_WRITE="0")
             check("MADEIRA_SELF_WRITE=0: NtWriteVirtualMemory sends the write to the server and no protect is recorded",
@@ -670,7 +682,7 @@ check("the switch is read in one place, and the record only by these functions",
       src.count("ios_self_write(") == 2 and src.count("ios_self_write_note_protect(") == 2)
 check("the image test reads the view tree under virtual_mutex",
       "    server_enter_uninterrupted_section( &virtual_mutex, &sigset );\n"
-      "    own = (view = find_view( addr, size )) && ((view->protect & SEC_IMAGE) || ios_hook_zone_holds( addr, size ));\n"
+      "    own = ios_hook_zone_holds( addr, size ) || ((view = find_view( addr, size )) && (view->protect & SEC_IMAGE));\n"
       "    server_leave_uninterrupted_section( &virtual_mutex, &sigset );" in function(src, "static int ios_self_write_in_reach( const char *addr, SIZE_T size, int mode )"))
 check("the server's port and write path are untouched (writes into another process still refused)",
       "    return process->trace_data;\n}" in function(mach, "static mach_port_t get_process_port( struct process *process )") and

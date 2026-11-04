@@ -27005,6 +27005,16 @@ static int ios_hook_zone_holds( const char *addr, SIZE_T size )
     return z && (ULONG_PTR)addr >= z->base && (ULONG_PTR)addr + size <= z->base + z->size;
 }
 
+/* ios_self_write_server_log: the calling process's zone, for its log line; 0 when it has none. */
+static int ios_hook_zone_of_caller( ULONG_PTR *base, ULONG_PTR *size )
+{
+    const struct ios_hook_zone *z = ios_hook_zone_find( ios_hook_zones, ios_jit_current_peb(), peb );
+
+    *base = z ? z->base : 0;
+    *size = z ? z->size : 0;
+    return z != NULL;
+}
+
 /* map_image_view, virtual_mutex held: map a 64-bit process's ntdll (size bytes) top-down in [limit_low, limit_high]
  * with the zone directly above it. STATUS_SUCCESS: mapped with its zone; anything else: nothing changed, the caller
  * places the image as before. */
@@ -31006,20 +31016,38 @@ static int ios_self_write_in_reach( const char *addr, SIZE_T size, int mode )
     if (mode != 1 || size > IOS_WOW_WINDOW_SIZE ||
         ios_wow_addr_in_any_window( addr ) || ios_wow_addr_in_any_window( addr + size - 1 )) return 0;
     server_enter_uninterrupted_section( &virtual_mutex, &sigset );
-    own = (view = find_view( addr, size )) && ((view->protect & SEC_IMAGE) || ios_hook_zone_holds( addr, size ));
+    own = ios_hook_zone_holds( addr, size ) || ((view = find_view( addr, size )) && (view->protect & SEC_IMAGE));
     server_leave_uninterrupted_section( &virtual_mutex, &sigset );
     return own;
 }
 
-/* A write into the program's own memory (the pseudo-handle) that failed: one line each, at most 16 (log only). */
+/* A write into the program's own memory (the pseudo-handle) that failed: one line each, at most 16 (log only). For a 64-bit
+ * program the line says what ios_self_write_in_reach saw: the view at the address, the caller's hook zone, a 32-bit window. */
 static void ios_self_write_server_log( const void *addr, SIZE_T size, NTSTATUS status )
 {
     static unsigned n;
+    char why[192] = "";
 
     if (__sync_fetch_and_add( &n, 1 ) >= 16) return;
-    dprintf( 2, "[self-write] pid %04x: %p+%#lx, a %d-bit write into its own memory failed: %#x\n",
+    if (!ios_wow_base())
+    {
+        ULONG_PTR zbase, zsize;
+        struct file_view *view;
+        sigset_t sigset;
+        char where[96];
+
+        server_enter_uninterrupted_section( &virtual_mutex, &sigset );
+        view = find_view( addr, size );
+        if (view) snprintf( where, sizeof(where), "view %p+%#lx protect %#x", view->base, (unsigned long)view->size, view->protect );
+        else snprintf( where, sizeof(where), "no view" );
+        ios_hook_zone_of_caller( &zbase, &zsize );
+        snprintf( why, sizeof(why), " (%s; caller peb %p, hook zone %p+%#lx%s)", where, ios_jit_current_peb(),
+                  (void *)zbase, (unsigned long)zsize, ios_wow_addr_in_any_window( addr ) ? "; in a 32-bit window" : "" );
+        server_leave_uninterrupted_section( &virtual_mutex, &sigset );
+    }
+    dprintf( 2, "[self-write] pid %04x: %p+%#lx, a %d-bit write into its own memory failed: %#x%s\n",
              (unsigned)HandleToULong( NtCurrentTeb()->ClientId.UniqueProcess ), addr, (unsigned long)size,
-             ios_wow_base() ? 32 : 64, (unsigned)status );
+             ios_wow_base() ? 32 : 64, (unsigned)status, why );
 }
 #endif
 
