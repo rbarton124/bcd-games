@@ -4635,6 +4635,30 @@ void fill_vm_counters( VM_COUNTERS_EX *pvmi, int unix_pid )
 /**********************************************************************
  *           NtQueryInformationProcess  (NTDLL.@)
  */
+#ifdef WINE_IOS
+/* madeira-bcd code-trim (tools/patch-fex-ios-code-trim.py): the Wine-private class 1011, next to BCD's 1010
+ * (ProcessWineIosWowGuestBase), answers the address of the calling process's code-trim control block (virtual_ios.c struct
+ * ios_code_trim). The FEX WoW64 module asks once; without a block (env.MADEIRA_POOL_CODE_TRIM = 0, a full table, another process's
+ * handle) the class is unknown, as before, and that process never trims. Not in winternl.h's enum, so it is handled before the
+ * switch (a case label outside the enum would be a -Wswitch warning). */
+#define IOS_PROCESS_CODE_TRIM_CLASS 1011
+static NTSTATUS ios_query_code_trim( HANDLE handle, void *info, ULONG size, ULONG *ret_len )
+{
+    extern void *ios_code_trim_control( void *peb );
+    void *ctl;
+
+    if (ret_len) *ret_len = sizeof(ULONG_PTR);
+    if (size != sizeof(ULONG_PTR)) return STATUS_INFO_LENGTH_MISMATCH;
+    if (handle != GetCurrentProcess() || !(ctl = ios_code_trim_control( NtCurrentTeb()->Peb )))
+    {
+        if (ret_len) *ret_len = 0;
+        return STATUS_INVALID_INFO_CLASS;
+    }
+    *(ULONG_PTR *)info = (ULONG_PTR)ctl;
+    return STATUS_SUCCESS;
+}
+#endif
+
 NTSTATUS WINAPI NtQueryInformationProcess( HANDLE handle, PROCESSINFOCLASS class, void *info,
                                            ULONG size, ULONG *ret_len )
 {
@@ -4643,6 +4667,9 @@ NTSTATUS WINAPI NtQueryInformationProcess( HANDLE handle, PROCESSINFOCLASS class
 
     TRACE( "(%p,0x%08x,%p,0x%08x,%p)\n", handle, class, info, size, ret_len );
 
+#ifdef WINE_IOS
+    if (class == (PROCESSINFOCLASS)IOS_PROCESS_CODE_TRIM_CLASS) return ios_query_code_trim( handle, info, size, ret_len );
+#endif
     switch (class)
     {
     UNIMPLEMENTED_INFO_CLASS(ProcessBasePriority);

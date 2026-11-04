@@ -389,6 +389,7 @@ jobs:
           python3 tests/host/check-fex-inval-null-thread.py
           python3 tests/host/check-fex-processorid.py
           python3 tests/host/check-fex-moffs-rip.py
+          python3 tests/host/check-fex-code-trim.py
           python3 tests/host/check-thread-sample-syscall.py
           python3 tests/host/check-usd-osversion.py
           python3 tests/host/check-thread-fault-isolate.py

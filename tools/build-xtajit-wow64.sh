@@ -29,6 +29,9 @@
 #    instead of dereferencing it and ending the whole process. Optional like the guard.
 #  - patch-fex-ios-moffs-rip.py (round 630, O3 S9): opt-in (MADEIRA_FEX_MOFFS_RIP=1): MOV moffs (A0-A3) records its
 #    guest RIP, so an inline self-modifying store of that form resumes at itself (Unreal Gold's fire textures).
+#  - patch-fex-ios-code-trim.py (madeira-bcd code-trim): a process gives its code buffers back for one small new buffer when
+#    BCD's ntdll asks (NtQueryInformationProcess class 1011), at the end of an outermost syscall, all or nothing; the pool asks an
+#    idle background program while the program being played is short (build/ntdll-unix/virtual_ios.c). Optional like the guard.
 set -eu
 R="$(pwd)"
 MINGW="${MINGW:-$R/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin}"
@@ -54,7 +57,9 @@ python3 "$R/tools/patch-fex-ios-processorid.py" "$R/FEX/FEXCore/Source/Interface
 python3 "$R/tools/patch-fex-ios-moffs-rip.py" "$R/FEX/FEXCore/Source/Interface/Core/Core.cpp" || echo "::warning::the MOV moffs RIP opt-in was not applied (FEX anchor changed); xtajit.dll is built without it"
 # opt-in (round 626, Burnout Paradise 7MSNGW): MADEIRA_FEX_CPUID_CLASSIC=1 reports CPUID.1:EDX DE and PSE; EDX unchanged without it
 python3 "$R/tools/patch-fex-ios-cpuid-classic.py" "$R/FEX/$CPUIDF" || echo "::warning::the CPUID DE/PSE opt-in was not applied (FEX anchor changed); xtajit.dll is built without it"
-restore() { git -C "$R/FEX" checkout -- "$CPUIDF" Source/Windows/Common/Priv.h Source/Windows/WOW64/Module.cpp "$OPDISPF" FEXCore/Source/Interface/Core/Core.cpp FEXCore/Source/Interface/Core/JIT/MiscOps.cpp; }
+# madeira-bcd code-trim: a process gives its code buffer back for a small one when BCD's ntdll asks ([gen-trim]); last, optional
+python3 "$R/tools/patch-fex-ios-code-trim.py" "$R/FEX" || echo "::warning::the code-trim patch was not applied (FEX anchor changed); xtajit.dll is built without it"
+restore() { git -C "$R/FEX" checkout -- "$CPUIDF" Source/Windows/Common/Priv.h Source/Windows/WOW64/Module.cpp "$OPDISPF" FEXCore/Source/Interface/Core/Core.cpp FEXCore/Source/Interface/Core/JIT/MiscOps.cpp FEXCore/Source/Interface/Core/CPUBackend.cpp FEXCore/Source/Interface/Core/CPUBackend.h; }
 trap restore EXIT
 
 cmake -S "$R/FEX" -B "$B" -G Ninja -DCMAKE_BUILD_TYPE=Release \
@@ -77,4 +82,5 @@ if ! diff "$B.old-exports" "$B.new-exports"; then
     exit 1
 fi
 cp "$B/Bin/libwow64fex.dll" "$SHIP"
-echo "::notice::xtajit.dll (WOW64) built from FEX $(git -C FEX rev-parse --short HEAD) with the CPUID index wrap, the TSD-slot TEB for the WinAPI shims, the thread-map guard and the 0x82 alias, and shipped"
+TRIM="$(grep -c 'madeira-bcd code-trim' "$R/FEX/Source/Windows/WOW64/Module.cpp" || true)"
+echo "::notice::xtajit.dll (WOW64) built from FEX $(git -C FEX rev-parse --short HEAD) with the CPUID index wrap, the TSD-slot TEB for the WinAPI shims, the thread-map guard and the 0x82 alias$([ "${TRIM:-0}" -gt 0 ] && echo ', the code trim'), and shipped"

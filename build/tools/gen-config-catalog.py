@@ -159,6 +159,15 @@ OVERLAY = {
                         "buffer larger than a request is cut to its size (the rest stays free). Before, free buffers "
                         "never merged, so the pool could refuse one 128 MB buffer with hundreds of MB free in pieces, "
                         "and a 16 KB request took a whole free 16-32 MB buffer. 0 turns both off. Read once per session."},
+    # madeira-bcd code-trim (build/ntdll-unix/virtual_ios.c, tools/patch-fex-ios-code-trim.py).
+    "env.MADEIRA_POOL_CODE_TRIM": {"category": "Memory & JIT pool", "title": "Idle programs give their code buffers back",
+                "kind": "bool", "default": "1",
+                "note": "On by default. When the program you launched cannot get the code buffer it asks for, the session's "
+                        "other 32-bit programs that hold 24 MB or more of code buffers and made none for 20 s (a launcher "
+                        "behind the game, such as Ubisoft Connect) are asked to continue on one 8 MB buffer, and keep to 8 MB "
+                        "while the program you launched runs; what they give back goes to it. Each does so at the end of a "
+                        "system call once all its threads are waiting, and translates its code again when it next runs. "
+                        "\"[pool-trim]\" and \"[gen-trim]\" lines say what happened. 0 turns it off. Read once per session."},
     "env.MADEIRA_POOL_CODE_FOREGROUND": {"category": "Memory & JIT pool", "title": "Larger code buffers for the program you launched",
                 "kind": "bool", "default": "1",
                 "note": "On by default. Every program of the session other than the one you launched (a launcher, its "

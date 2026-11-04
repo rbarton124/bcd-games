@@ -4185,6 +4185,78 @@ static int ios_pool_carve_merge_enabled(void)
     return on;
 }
 
+/* madeira-bcd code-trim: a 32-bit process's FEX gives its code buffers back for one small new buffer when the pool asks
+ * (tools/patch-fex-ios-code-trim.py). The request lives here: one control block per process whose FEX asked for it through the
+ * Wine-private NtQueryInformationProcess class ProcessWineIosCodeTrim (process_ios.c ios_query_code_trim). FEX looks at it at the
+ * end of every outermost syscall, trims when every thread of the process is parked, and answers in it; the old buffers come back
+ * through the normal release ("tail FREE"). The layout is FEX's IosCodeTrim::Control. env.MADEIRA_POOL_CODE_TRIM = 0 offers no
+ * block (FEX then never trims). */
+struct ios_code_trim
+{
+    uint32_t magic;             /* IOS_CODE_TRIM_MAGIC */
+    uint32_t size_mb;           /* the new buffer's size */
+    volatile uint32_t request;  /* one more for each request */
+    volatile uint32_t done;     /* FEX: the request it last finished */
+    volatile int32_t result;    /* FEX: 1 or 2 done, -1 not possible in that process, -3 no room for the new buffer */
+    volatile uint32_t declined; /* FEX: tries declined or busy since */
+};
+#define IOS_CODE_TRIM_MAGIC 0x4d495254   /* "TRIM" */
+#define IOS_CODE_TRIM_MAX   64
+static struct
+{
+    void *peb;                  /* the process; NULL: a free slot */
+    time_t asked_at;            /* the pool's last request, 0: never */
+    struct ios_code_trim ctl;
+} ios_code_trims[IOS_CODE_TRIM_MAX];
+static pthread_mutex_t ios_code_trim_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static int ios_pool_code_trim_enabled(void)
+{
+    static int on = -1;
+
+    if (on < 0)
+    {
+        const char *e = getenv( "MADEIRA_POOL_CODE_TRIM" );
+        on = !(e && !strcmp( e, "0" ));
+    }
+    return on;
+}
+
+/* process_ios.c: the control block of the calling process `peb`, made on its first ask; NULL when the trim is off or the table is
+ * full. */
+void *ios_code_trim_control( void *peb )
+{
+    unsigned i, slot = IOS_CODE_TRIM_MAX;
+
+    if (!peb || !ios_pool_code_trim_enabled()) return NULL;
+    pthread_mutex_lock( &ios_code_trim_lock );
+    for (i = 0; i < IOS_CODE_TRIM_MAX; i++)
+    {
+        if (ios_code_trims[i].peb == peb) { slot = i; break; }
+        if (!ios_code_trims[i].peb && slot == IOS_CODE_TRIM_MAX) slot = i;
+    }
+    if (slot < IOS_CODE_TRIM_MAX && ios_code_trims[slot].peb != peb)
+    {
+        memset( &ios_code_trims[slot], 0, sizeof(ios_code_trims[slot]) );
+        ios_code_trims[slot].ctl.magic = IOS_CODE_TRIM_MAGIC;
+        ios_code_trims[slot].peb = peb;
+    }
+    pthread_mutex_unlock( &ios_code_trim_lock );
+    return slot < IOS_CODE_TRIM_MAX ? &ios_code_trims[slot].ctl : NULL;
+}
+
+/* ios_jit_reclaim_process: the process ended, its block goes (its FEX runs no more). */
+static void ios_code_trim_owner_died( void *peb )
+{
+    unsigned i;
+
+    if (!peb) return;
+    pthread_mutex_lock( &ios_code_trim_lock );
+    for (i = 0; i < IOS_CODE_TRIM_MAX; i++)
+        if (ios_code_trims[i].peb == peb) memset( &ios_code_trims[i], 0, sizeof(ios_code_trims[i]) );
+    pthread_mutex_unlock( &ios_code_trim_lock );
+}
+
 /* A release by a thread of another process than the carve's owner: a dead
  * process's late release of a buffer that has since been handed on. */
 static int ios_tail_carve_foreign_release( const struct ios_tail_carve *carve, void *caller_peb )
@@ -13911,6 +13983,7 @@ void ios_jit_reclaim_process( void *peb )
     /* madeira-bcd: and its FEX code buffers (after the pool lock: the carve
      * lock is never taken under it) */
     ios_tail_carves_owner_died( peb );
+    ios_code_trim_owner_died( peb );   /* madeira-bcd code-trim */
 
     if (ranges || maps_killed)
         dprintf(2, "[jit-pool] RECLAIM peb=%p: %d ranges 0x%lx bytes freed (grace %ds), "
