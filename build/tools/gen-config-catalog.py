@@ -159,7 +159,10 @@ OVERLAY = {
                         "programs in its folder; for a Steam game, its install folder) keeps what the pool can afford, as "
                         "before. Without it the programs that start first take what is free, and a game that starts last, "
                         "behind a launcher, is held to 16 MB buffers and runs slowly. A game with no other programs sees no "
-                        "change. 0 turns it off. A \"[pool-fg]\" line says what each program got."},
+                        "change. It also keeps the buffer size the program you launched runs on: a buffer it frees is not "
+                        "given to another program for 30 s, and it is not cut below its current size while the pool has "
+                        "more than 16 MB to spare (Far Cry 3 behind Ubisoft Connect stuttered on 16 MB buffers). 0 turns "
+                        "it off. A \"[pool-fg]\" line says what each program got."},
     # madeira-bcd: NtWriteVirtualMemory of a 32-bit program into its own window (ios_self_write, build/ntdll-unix/virtual_ios.c).
     "env.MADEIRA_SELF_WRITE": {"category": "Memory & JIT pool", "title": "A program writes its own memory",
                 "kind": "choice", "default": "",

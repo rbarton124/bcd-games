@@ -45,7 +45,13 @@ helpers = ''.join(function(signature) for signature in (
     'static unsigned ios_tail_carves_retire_owner(',
     'static int ios_tail_carve_foreign_release(',
     'static void ios_tail_carves_owner_died(',
+    'static int ios_pool_fg_held(',
+    'static size_t ios_pool_free_room(',
+    'static int ios_pool_fg_keep_size(',
 ))
+fg_defines = '\n'.join(line for line in source.splitlines()
+                       if line.startswith(('#define IOS_POOL_FG_HOLD_SEC ', '#define IOS_POOL_FG_KEEP_FLOOR ')))
+assert fg_defines.count('#define') == 2
 carve_start = source.index('#define IOS_TAIL_CARVE_MAX ')
 carve_table = source[carve_start:source.index('\n\n', carve_start)]
 ec = source[source.index('size_t alloc_size = (*size_ptr + 0x3FFF) & ~0x3FFFUL;'):]
@@ -65,6 +71,9 @@ assert source.count('ios_tail_carves[ios_tail_carve_n].peb = carve_peb;') == 3, 
 assert source.count('ios_tail_carves[ios_tail_carve_n].peb = NULL;') == 1, 'a skipped piece has no owner'
 assert 'ios_tail_carves[best].peb = carve_peb;' in ec and 'ios_tail_carves[best].retired = 0;' in ec
 assert ec.count('ios_tail_carve_ready( &ios_tail_carves[') == 2, 'the cap lift and the reuse share one rule'
+assert ec.count('!ios_pool_fg_held( carve_fg, ios_tail_carves[') == 2, 'pool-fg-keep: the cap lift and the reuse hold alike'
+assert source.count('.fg = carve_fg;') == 4 and source.count('ios_tail_carves[ios_tail_carve_n].fg = 0;') == 1 and \
+    source.count('carves[i].fg = 0;') == 1, 'pool-fg-keep: every handed carve records the class; a skipped piece and an exit clear it'
 assert ('ios_tail_carve_scan( (char *)ios_jit_rx_base_global + ios_tail_carves[best].off,\n'
         '                                     ios_tail_carves[best].size, 1 )') in ec, 'a strict thread scan'
 assert release_block.index('ios_tail_carve_foreign_release(') < release_block.index('ios_tail_carves[i].free = 1;')
@@ -93,9 +102,11 @@ static void *ios_jit_rx_base_global, *ios_jit_rw_base_global;
 uintptr_t ios_jit_low_rx_global, ios_jit_low_rw_global;
 size_t ios_jit_low_size_global;
 static size_t ios_jit_pool_size_global, jit_pool_offset, ios_pool_head_reserve;
-static size_t ios_pool_fg_adjust( size_t budget_cap, size_t head_now, size_t tail_now )
-{   /* madeira-bcd pool-fg: no game folder in this fixture (tests/host/check-pool-code-policy.py covers the policy) */
+static int fixture_fg;   /* pool-fg-keep: the caller is the program being played (check-pool-code-policy.py covers the class) */
+static size_t ios_pool_fg_adjust( size_t budget_cap, size_t head_now, size_t tail_now, int *is_fg_out )
+{
     (void)head_now; (void)tail_now;
+    *is_fg_out = fixture_fg;
     return budget_cap;
 }
 static volatile size_t ios_jit_low_reserved, ios_jit_tail_reserved;
@@ -103,7 +114,7 @@ static size_t ios_jit_hole_off_eff, ios_jit_hole_end_eff, ios_jit_hole2_off, ios
 static int ios_jit_low_full_logged;
 static unsigned ios_tail_carve_n;
 static pthread_mutex_t ios_tail_carve_lock = PTHREAD_MUTEX_INITIALIZER;
-''' + carve_table + r'''
+''' + carve_table + '\n' + fg_defines + r'''
 static uintptr_t owner;
 static int scan_busy, scans, occupied;
 static void *ios_jit_current_peb(void) { return (void *)owner; }
@@ -140,7 +151,7 @@ static int tail_carve(size_t *size_ptr, void **ret)
     ios_jit_tail_reserved = start + size;
     CHECK(ios_tail_carve_n + 1 + n <= IOS_TAIL_CARVE_MAX);
     ios_tail_carves[ios_tail_carve_n++] = (struct ios_tail_carve){ .off = total - start - size, .size = size,
-                                                                   .peb = (void *)owner };
+                                                                   .peb = (void *)owner, .fg = fixture_fg };
     for (k = 0; k < n; k++)
         if (ps[k] >= MB)
             ios_tail_carves[ios_tail_carve_n++] = (struct ios_tail_carve){ .off = po[k], .size = ps[k], .free = 1 };
@@ -377,6 +388,81 @@ static void unit(void)
     puts("PASS: a release from another process is refused; the owner's (or a TEB-less thread's) works as before");
 }
 
+/* pool-fg-keep: Far Cry 3 behind Ubisoft Connect (2026-11-04): the pool's budget cap is 16 MB, the free room 58 MB (the head
+ * reserve is 48 MB), the game and a helper each run on a 32 MB buffer. */
+static size_t keep(int fg_on)
+{
+    struct proc game = { .peb = 0x200 }, helper = { .peb = 0x300 };
+    void *rx;
+    size_t size, got;
+
+    reset();
+    ios_pool_head_reserve = 48 * MB;
+    ios_jit_low_reserved = ios_jit_low_size_global;                      /* region C full */
+    jit_pool_offset = 0x10000000;
+    ios_jit_tail_reserved = 0x24600000;                                  /* 58 MB free between head and tail */
+    ios_tail_carves[0] = (struct ios_tail_carve){ .off = 0x13a00000, .size = 32 * MB, .peb = (void *)0x200, .fg = fg_on };
+    ios_tail_carves[1] = (struct ios_tail_carve){ .off = 0x15a00000, .size = 32 * MB, .peb = (void *)0x300 };
+    ios_tail_carve_n = 2;
+    game.code = pool + 0x13a00000; game.code_size = 32 * MB;
+    helper.code = pool + 0x15a00000; helper.code_size = 32 * MB;
+    fake_now = 10;
+
+    owner = 0x300; fixture_fg = 0;
+    size = 32 * MB;
+    CHECK(allocate(&size, &rx) == STATUS_NO_MEMORY);                     /* a helper in the same state steps down, as before */
+    owner = 0x200; fixture_fg = fg_on;
+    size = 64 * MB;
+    CHECK(allocate(&size, &rx) == STATUS_NO_MEMORY);                     /* more than the game runs on: the budget applies */
+
+    got = rotate(&game, 10, 0x10000000);                                 /* the game's next generation */
+    if (!fg_on)
+    {
+        CHECK(got == 16 * MB);                                           /* the trap: 16 MB, then 32/16 alternating at best */
+        return got;
+    }
+    CHECK(got == 32 * MB && ios_jit_tail_reserved == 0x26600000 && ios_tail_carves[0].free && ios_tail_carves[0].fg);
+    puts("PASS: pool-fg-keep: the program being played keeps its 32 MB size from the head reserve; a helper steps down");
+
+    fixture_fg = 0;                                                      /* the helper rotates: the game's freed buffer is held */
+    got = rotate(&helper, 12, 0x10000000);
+    CHECK(got == 16 * MB && ios_tail_carves[0].free && ios_jit_tail_reserved == 0x27600000);
+    CHECK(ios_tail_carves[1].free && !ios_tail_carves[1].fg);              /* the helper's old one: anyone's ... */
+    ios_tail_carves[1].free = 0; ios_tail_carves[1].peb = (void *)0x400; /* ... a third program takes it */
+    fixture_fg = 1;                                                      /* 10 MB of room left: no new 32 MB, it takes its own back */
+    got = rotate(&game, 14, 0x10000000);
+    CHECK(got == 32 * MB && off_of(game.code) == 0x13a00000 && ios_jit_tail_reserved == 0x27600000);
+    CHECK(!ios_tail_carves[0].free && ios_tail_carves[0].peb == (void *)0x200 && ios_tail_carves[0].fg);
+    ios_tail_carves[2].free = 0;                                         /* without its other buffer free: */
+    size = 32 * MB;
+    CHECK(allocate(&size, &rx) == STATUS_NO_MEMORY);                     /* the floor: 10 MB room would fall below 16 MB */
+    ios_tail_carves[2].free = 1;
+    CHECK(ios_pool_fg_keep_size(1, 32 * MB, 32 * MB, 48 * MB) && !ios_pool_fg_keep_size(1, 32 * MB, 32 * MB, 48 * MB - 1) &&
+          !ios_pool_fg_keep_size(0, 32 * MB, 32 * MB, 64 * MB) && !ios_pool_fg_keep_size(1, 32 * MB, 16 * MB, 64 * MB) &&
+          !ios_pool_fg_keep_size(1, 0, 16 * MB, 64 * MB) && ios_pool_free_room(100, 40, 50, 5) == 5 &&
+          !ios_pool_free_room(100, 60, 50, 0) && !ios_pool_free_room(100, 40, 50, 11));
+    puts("PASS: pool-fg-keep: the game's freed buffer is held from a helper and its next generation takes it back; the 16 MB floor holds");
+
+    fixture_fg = 0; owner = 0x300;                                       /* the game's other buffer, freed at 14: held for 30 s */
+    fake_now = 43;
+    size = 32 * MB;
+    CHECK(allocate(&size, &rx) == STATUS_NO_MEMORY);
+    fake_now = 44;
+    size = 32 * MB;
+    CHECK(allocate(&size, &rx) == STATUS_SUCCESS && size == 32 * MB && off_of(rx) == ios_tail_carves[2].off &&
+          ios_tail_carves[2].peb == (void *)0x300 && !ios_tail_carves[2].fg);
+    {   /* an exit clears the class with the owner */
+        size_t bytes;
+        pthread_mutex_lock( &ios_tail_carve_lock );
+        CHECK(ios_tail_carves_retire_owner(ios_tail_carves, ios_tail_carve_n, (void *)0x200, 50, &bytes) == 1);
+        pthread_mutex_unlock( &ios_tail_carve_lock );
+        CHECK(ios_tail_carves[0].retired && !ios_tail_carves[0].fg);
+    }
+    puts("PASS: pool-fg-keep: after 30 s another program may have it; an exit clears the class");
+    fixture_fg = 0;
+    return 32 * MB;
+}
+
 int main(void)
 {
     void *p = NULL;
@@ -386,6 +472,8 @@ int main(void)
     pool = p;
     low = pool + 0x38000000;
     unit();
+    CHECK(keep(0) == 16 * MB && keep(1) == 32 * MB);
+    puts("PASS: pool-fg-keep: without the class (MADEIRA_POOL_CODE_FOREGROUND=0) the game gets 16 MB, as on 2026-11-04");
     off = replay(0);
     printf("PASS: MADEIRA_POOL_CODE_EXIT_RECLAIM=0 replays the 13:11 log: tail_resv 0x18f38000, the game's buffer 0x%zx (16 MB)\n", off);
     on = replay(1);

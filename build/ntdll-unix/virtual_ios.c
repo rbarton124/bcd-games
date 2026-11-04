@@ -404,6 +404,39 @@ static int ios_pool_path_in_folder( const WCHAR *path, size_t len, const char *f
     }
     return path[n] == '\\' || path[n] == '/';
 }
+
+/* madeira-bcd pool-fg-keep: the program being played keeps the code-buffer size it runs on.
+ *
+ * FEX allocates a process's next buffer before it frees the current one, so a game alternates between two buffers. With a launcher's
+ * helpers holding most of the pool, the game got one 32 MB buffer and then only 16 MB ones, each discarded after one to two seconds
+ * (Ubisoft Connect + Far Cry 3, 2026-11-04: 57 of 61 generations at 16 MB, a hitch of 200-430 ms at each, 1% low 7 fps instead of
+ * 24-28). Two rules, for the program being played only (the ios_pool_fg_adjust class; off with it):
+ *  - a buffer it freed is not handed to another program for IOS_POOL_FG_HOLD_SEC (its next generation takes it back);
+ *  - asked for no more than the largest buffer it holds, it is not refused for the head reserve's sake, as long as the pool's free room
+ *    stays above IOS_POOL_FG_KEEP_FLOOR after the carve (the reserve guards image copies; 16 MB of it is never taken this way). */
+#define IOS_POOL_FG_HOLD_SEC   30
+#define IOS_POOL_FG_KEEP_FLOOR (16u * 1024 * 1024)
+
+/* 1 when a free carve last handed to the program being played (carve_fg), freed at `freed_at`, is held back from a caller that is not
+ * the program being played. */
+static int ios_pool_fg_held( int caller_fg, int carve_fg, time_t freed_at, time_t now )
+{
+    return !caller_fg && carve_fg && now - freed_at < IOS_POOL_FG_HOLD_SEC;
+}
+
+/* The pool's free room between the head and the tail, the holes left out (0 for inconsistent cursors). */
+static size_t ios_pool_free_room( size_t total, size_t head, size_t tail, size_t holes )
+{
+    if (head > total || tail > total - head || holes > total - head - tail) return 0;
+    return total - head - tail - holes;
+}
+
+/* 1 when the program being played may have a new carve of `want` bytes although the budget cap refused it: it holds a buffer at
+ * least that large (`current`), and the free room stays at least IOS_POOL_FG_KEEP_FLOOR after the carve. */
+static int ios_pool_fg_keep_size( int is_fg, size_t want, size_t current, size_t room )
+{
+    return is_fg && want && want <= current && room >= want && room - want >= IOS_POOL_FG_KEEP_FLOOR;
+}
 /* pool-code-policy-test:end */
 
 /* madeira-bcd pool-mid: the one-hole helpers above applied to both holes (hole 1
@@ -3956,6 +3989,7 @@ struct ios_tail_carve
     time_t freed_at;
     void  *peb;       /* madeira-bcd: the pseudo-process it was handed to (NULL = unknown) */
     int    retired;   /* madeira-bcd: freed because that process exited, not by FEX */
+    int    fg;        /* madeira-bcd pool-fg-keep: handed to the program being played (ios_pool_fg_held) */
 };
 static struct ios_tail_carve ios_tail_carves[IOS_TAIL_CARVE_MAX];
 
@@ -4079,6 +4113,7 @@ static unsigned ios_tail_carves_retire_owner( struct ios_tail_carve *carves, uns
         carves[i].retired = 1;
         carves[i].freed_at = now;
         carves[i].peb = NULL;
+        carves[i].fg = 0;
         *bytes += carves[i].size;
         retired++;
     }
@@ -5803,7 +5838,7 @@ USHORT ios_cur_image_info_machine(void)
  * per-class limits (see ios_pool_code_class_cap). Its image path is read lock-free from its own PEB, as ios_thread_stack_floor does;
  * an unreadable path counts as "other". Unchanged without a game folder, or with env.MADEIRA_POOL_CODE_FOREGROUND = 0. Both are read
  * at each new carve (a few hundred per session), so a later session of the same app run sees its own folder. */
-static size_t ios_pool_fg_adjust( size_t budget_cap, size_t head_now, size_t tail_now )
+static size_t ios_pool_fg_adjust( size_t budget_cap, size_t head_now, size_t tail_now, int *is_fg_out )
 {
     const char *folder = getenv( "BCD_GAME_FOLDER" ), *off = getenv( "MADEIRA_POOL_CODE_FOREGROUND" );
     size_t n = ios_pool_game_folder_len( folder ), len = 0, cap = budget_cap, k, base = 0;
@@ -5817,12 +5852,14 @@ static size_t ios_pool_fg_adjust( size_t budget_cap, size_t head_now, size_t tai
     char name[48];
     int is_fg;
 
+    *is_fg_out = 0;
     if (!n || (off && !strcmp( off, "0" ))) return budget_cap;
     peb = ios_jit_current_peb();
     pp = peb ? peb->ProcessParameters : NULL;
     if (pp) { path = pp->ImagePathName.Buffer; len = pp->ImagePathName.Length / sizeof(WCHAR); }
     (void)head_now; (void)tail_now;
     is_fg = ios_pool_path_in_folder( path, len, folder, n );
+    *is_fg_out = is_fg;
     cap = ios_pool_code_class_cap( is_fg, budget_cap );
     pid = ios_jit_current_pid();
     for (i = 0; i < logged_n && logged_pid[i] != pid; i++) ;
@@ -35210,6 +35247,7 @@ static inline __attribute__((always_inline)) NTSTATUS ios_nt_impl_NtAllocateVirt
         int kept_large_carve = 0, reuse_all_carves = 0, retired_busy = 0;
         size_t tail_cap = ~(size_t)0, budget_cap = ~(size_t)0;
         void *carve_peb = ios_jit_current_peb();   /* madeira-bcd: the carve's owner, see ios_tail_carve_ready */
+        int carve_fg = 0;                          /* madeira-bcd pool-fg-keep: the caller is the program being played */
         /* ml459 (#75): cap a single EC code buffer at 16MB. FEX asks for 32MB
          * once its buffers get hot, but an old generation stays pinned by any
          * thread still referencing it (see [pool-tail] PIN) — and a 32MB
@@ -35256,19 +35294,42 @@ static inline __attribute__((always_inline)) NTSTATUS ios_nt_impl_NtAllocateVirt
                                             ios_pool_head_reserve +
                                             ios_pool_hole_between( ios_jit_pool_size_global, head_now, tail_now,
                                                                    ios_jit_hole2_off, ios_jit_hole2_end ) );
-            cap = ios_pool_fg_adjust( cap, head_now, tail_now );   /* madeira-bcd pool-fg: per-class limits when the app published BCD_GAME_FOLDER */
+            cap = ios_pool_fg_adjust( cap, head_now, tail_now, &carve_fg );   /* madeira-bcd pool-fg: per-class limits when the app published BCD_GAME_FOLDER */
             /* A retired generation of this size already sitting on the carve
              * free-list costs the pool nothing new: never refuse that. */
             budget_cap = cap;
             if (alloc_size > cap)
             {
                 unsigned fi;
+                size_t current = 0;   /* madeira-bcd pool-fg-keep: the largest buffer the caller holds */
                 time_t now = time( NULL );
                 pthread_mutex_lock( &ios_tail_carve_lock );
                 for (fi = 0; fi < ios_tail_carve_n; fi++)
+                {
+                    if (!ios_tail_carves[fi].free && ios_tail_carves[fi].peb == carve_peb && ios_tail_carves[fi].size > current)
+                        current = ios_tail_carves[fi].size;
                     if (ios_tail_carve_ready( &ios_tail_carves[fi], now ) && ios_tail_carves[fi].size >= alloc_size &&
-                        (low_ok || !ios_tail_carve_in_low( ios_tail_carves[fi].off ))) { cap = alloc_size; break; }
+                        (low_ok || !ios_tail_carve_in_low( ios_tail_carves[fi].off )) &&
+                        !ios_pool_fg_held( carve_fg, ios_tail_carves[fi].fg, ios_tail_carves[fi].freed_at, now ))
+                    { cap = alloc_size; break; }
+                }
                 pthread_mutex_unlock( &ios_tail_carve_lock );
+                /* madeira-bcd pool-fg-keep: the program being played does not step down below the buffer it runs on */
+                if (alloc_size > cap &&
+                    ios_pool_fg_keep_size( carve_fg, alloc_size, current,
+                                           ios_pool_free_room( ios_jit_pool_size_global, head_now, tail_now,
+                                                               ios_pool_hole_between( ios_jit_pool_size_global, head_now, tail_now,
+                                                                                      ios_jit_hole_off_eff, ios_jit_hole_end_eff ) +
+                                                               ios_pool_hole_between( ios_jit_pool_size_global, head_now, tail_now,
+                                                                                      ios_jit_hole2_off, ios_jit_hole2_end ) ) ))
+                {
+                    static unsigned keep_n;
+                    if (++keep_n <= 16)
+                        dprintf( 2, "[pool-fg] madeira-bcd: the program being played keeps its 0x%lx code buffer: a new one of "
+                                    "that size from the head reserve (cap 0x%lx, tail_resv=0x%lx head_used=0x%lx)\n",
+                                 (unsigned long)alloc_size, (unsigned long)cap, (unsigned long)tail_now, (unsigned long)head_now );
+                    cap = alloc_size;
+                }
             }
             tail_cap = cap;
 
@@ -35300,6 +35361,7 @@ retry_code_carve_reuse:
             for (i = 0; i < ios_tail_carve_n; i++)
                 if (ios_tail_carve_ready( &ios_tail_carves[i], now ) && ios_tail_carves[i].size >= alloc_size &&
                     (low_ok || !ios_tail_carve_in_low( ios_tail_carves[i].off )) &&   /* madeira-bcd pool-low */
+                    !ios_pool_fg_held( carve_fg, ios_tail_carves[i].fg, ios_tail_carves[i].freed_at, now ) &&   /* pool-fg-keep */
                     (best == ~0u || ios_tail_carves[i].size < ios_tail_carves[best].size))
                     best = i;
             if (best != ~0u && !reuse_all_carves &&
@@ -35335,6 +35397,7 @@ retry_code_carve_reuse:
                 ios_tail_carves[best].free = 0;
                 ios_tail_carves[best].retired = 0;
                 ios_tail_carves[best].peb = carve_peb;
+                ios_tail_carves[best].fg = carve_fg;
                 pthread_mutex_unlock( &ios_tail_carve_lock );
                 {
                     volatile uint32_t *rw_words = (volatile uint32_t *)jit_rw;
@@ -35387,6 +35450,7 @@ retry_code_carve_reuse:
                     ios_tail_carves[ios_tail_carve_n].freed_at = 0;
                     ios_tail_carves[ios_tail_carve_n].peb = carve_peb;
                     ios_tail_carves[ios_tail_carve_n].retired = 0;
+                    ios_tail_carves[ios_tail_carve_n].fg = carve_fg;
                     ios_tail_carve_n++;
                 }
                 pthread_mutex_unlock( &ios_tail_carve_lock );
@@ -35490,6 +35554,7 @@ retry_code_carve_reuse:
                         ios_tail_carves[ios_tail_carve_n].freed_at = 0;
                         ios_tail_carves[ios_tail_carve_n].peb = carve_peb;
                         ios_tail_carves[ios_tail_carve_n].retired = 0;
+                        ios_tail_carves[ios_tail_carve_n].fg = carve_fg;
                         ios_tail_carve_n++;
                     }
                     pthread_mutex_unlock( &ios_tail_carve_lock );
@@ -35656,6 +35721,7 @@ retry_code_carve_reuse:
                 ios_tail_carves[ios_tail_carve_n].freed_at = 0;
                 ios_tail_carves[ios_tail_carve_n].peb = carve_peb;
                 ios_tail_carves[ios_tail_carve_n].retired = 0;
+                ios_tail_carves[ios_tail_carve_n].fg = carve_fg;
                 ios_tail_carve_n++;
             }
             /* madeira-bcd split pool: this carve went below a hole; the span it
@@ -35672,6 +35738,7 @@ retry_code_carve_reuse:
                     ios_tail_carves[ios_tail_carve_n].freed_at = 0;   /* never executed, outside region C */
                     ios_tail_carves[ios_tail_carve_n].peb = NULL;
                     ios_tail_carves[ios_tail_carve_n].retired = 0;
+                    ios_tail_carves[ios_tail_carve_n].fg = 0;
                     ios_tail_carve_n++;
                 }
             }

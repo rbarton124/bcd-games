@@ -43,9 +43,13 @@ helpers = ''.join(function(native, signature) for signature in (
     'static int ios_tail_carve_in_low(',
     'static int ios_pool_preserve_code_carve(',
     'static int ios_tail_carve_ready(',
+    'static int ios_pool_fg_held(',
+    'static size_t ios_pool_free_room(',
+    'static int ios_pool_fg_keep_size(',
 ))
 carve_start = native.index('#define IOS_TAIL_CARVE_MAX ')
-carve_table = native[carve_start:native.index('\n\n', carve_start)]
+carve_table = native[carve_start:native.index('\n\n', carve_start)] + '\n' + '\n'.join(
+    line for line in native.splitlines() if line.startswith(('#define IOS_POOL_FG_HOLD_SEC ', '#define IOS_POOL_FG_KEEP_FLOOR ')))
 
 c_fixture = r'''
 #include <stdint.h>
@@ -66,9 +70,10 @@ static uintptr_t ios_jit_low_rx_global, ios_jit_low_rw_global;
 static size_t ios_jit_low_size_global, ios_jit_pool_size_global;
 static volatile size_t ios_jit_low_reserved;
 static size_t jit_pool_offset, ios_jit_tail_reserved, ios_pool_head_reserve;
-static size_t ios_pool_fg_adjust( size_t budget_cap, size_t head_now, size_t tail_now )
+static size_t ios_pool_fg_adjust( size_t budget_cap, size_t head_now, size_t tail_now, int *is_fg_out )
 {   /* madeira-bcd pool-fg: no game folder in this fixture (tests/host/check-pool-code-policy.py covers the policy) */
     (void)head_now; (void)tail_now;
+    *is_fg_out = 0;
     return budget_cap;
 }
 static size_t ios_jit_hole_off_eff, ios_jit_hole_end_eff;
