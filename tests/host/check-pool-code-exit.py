@@ -46,6 +46,7 @@ helpers = ''.join(function(signature) for signature in (
     'static int ios_tail_carve_foreign_release(',
     'static void ios_tail_carves_owner_died(',
     'static int ios_pool_fg_held(',
+    'static int ios_pool_lift_allowed(',
     'static size_t ios_pool_free_room(',
     'static int ios_pool_fg_keep_size(',
     'static int ios_tail_carve_mergeable(',
@@ -65,8 +66,10 @@ trim_table = source[source.index('struct ios_code_trim\n{'):source.index('static
 trim_defines = '\n'.join(line for line in source.splitlines() if line.startswith('#define IOS_POOL_TRIM_'))
 assert trim_defines.count('#define') == 5
 fg_defines = '\n'.join(line for line in source.splitlines()
-                       if line.startswith(('#define IOS_POOL_FG_HOLD_SEC ', '#define IOS_POOL_FG_KEEP_FLOOR ', '#define IOS_POOL_CUT_MIN ')))
-assert fg_defines.count('#define') == 3
+                       if line.startswith(('#define IOS_POOL_FG_HOLD_SEC ', '#define IOS_POOL_FG_KEEP_FLOOR ', '#define IOS_POOL_CUT_MIN ',
+                                           '#define IOS_POOL_FG_EXITED ', '#define IOS_POOL_FG_EXIT_HOLD_SEC ',
+                                           '#define IOS_POOL_OTHER_MAX ')))
+assert fg_defines.count('#define') == 6
 carve_start = source.index('#define IOS_TAIL_CARVE_MAX ')
 carve_table = source[carve_start:source.index('\n\n', carve_start)]
 ec = source[source.index('size_t alloc_size = (*size_ptr + 0x3FFF) & ~0x3FFFUL;'):]
@@ -88,7 +91,10 @@ assert 'ios_tail_carves[best].peb = carve_peb;' in ec and 'ios_tail_carves[best]
 assert ec.count('ios_tail_carve_ready( &ios_tail_carves[') == 2, 'the cap lift and the reuse share one rule'
 assert ec.count('!ios_pool_fg_held( carve_fg, ios_tail_carves[') == 2, 'pool-fg-keep: the cap lift and the reuse hold alike'
 assert source.count('.fg = carve_fg;') == 4 and source.count('ios_tail_carves[ios_tail_carve_n].fg = 0;') == 1 and \
-    source.count('carves[i].fg = 0;') == 1, 'pool-fg-keep: every handed carve records the class; a skipped piece and an exit clear it'
+    'carves[i].fg = 0;' not in source and source.count('carves[i].fg = carves[i].fg ? IOS_POOL_FG_EXITED : 0;') == 1, \
+    'pool-fg-keep: every handed carve records the class; a skipped piece clears it, an exit marks it exited'
+assert ec.count('if (alloc_size > cap && !trim_held && ios_pool_lift_allowed( ios_pool_fg_policy_on(), carve_fg, alloc_size ))') == 1, \
+    'pool-fg-relaunch: the cap lift asks the class rule'
 assert ('ios_tail_carve_scan( (char *)ios_jit_rx_base_global + ios_tail_carves[best].off,\n'
         '                                     ios_tail_carves[best].size, 1 )') in ec, 'a strict thread scan'
 assert release_block.index('ios_tail_carve_foreign_release(') < release_block.index('ios_tail_carves[i].free = 1;')
@@ -118,18 +124,21 @@ uintptr_t ios_jit_low_rx_global, ios_jit_low_rw_global;
 size_t ios_jit_low_size_global;
 static size_t ios_jit_pool_size_global, jit_pool_offset, ios_pool_head_reserve;
 static int fixture_fg;   /* pool-fg-keep: the caller is the program being played (check-pool-code-policy.py covers the class) */
-static size_t ios_pool_fg_adjust( size_t budget_cap, size_t head_now, size_t tail_now, int *is_fg_out )
-{
-    (void)head_now; (void)tail_now;
-    *is_fg_out = fixture_fg;
-    return budget_cap;
-}
+static int fixture_policy;   /* pool-fg-relaunch: the classes apply (another program is held to IOS_POOL_OTHER_MAX) */
+static int ios_pool_fg_policy_on(void) { return fixture_policy; }
+static size_t ios_pool_fg_adjust( size_t budget_cap, size_t head_now, size_t tail_now, int *is_fg_out );
 static volatile size_t ios_jit_low_reserved, ios_jit_tail_reserved;
 static size_t ios_jit_hole_off_eff, ios_jit_hole_end_eff, ios_jit_hole2_off, ios_jit_hole2_end;
 static int ios_jit_low_full_logged;
 static unsigned ios_tail_carve_n;
 static pthread_mutex_t ios_tail_carve_lock = PTHREAD_MUTEX_INITIALIZER;
 ''' + carve_table + '\n' + fg_defines + '\n' + trim_table + trim_defines + r'''
+static size_t ios_pool_fg_adjust( size_t budget_cap, size_t head_now, size_t tail_now, int *is_fg_out )
+{
+    (void)head_now; (void)tail_now;
+    *is_fg_out = fixture_fg;
+    return fixture_policy && !fixture_fg && budget_cap > IOS_POOL_OTHER_MAX ? IOS_POOL_OTHER_MAX : budget_cap;
+}
 static uintptr_t owner;
 static int scan_busy, scans, occupied;
 static void *ios_jit_current_peb(void) { return (void *)owner; }
@@ -471,9 +480,9 @@ static size_t keep(int fg_on)
         pthread_mutex_lock( &ios_tail_carve_lock );
         CHECK(ios_tail_carves_retire_owner(ios_tail_carves, ios_tail_carve_n, (void *)0x200, 50, &bytes) == 1);
         pthread_mutex_unlock( &ios_tail_carve_lock );
-        CHECK(ios_tail_carves[0].retired && !ios_tail_carves[0].fg);
+        CHECK(ios_tail_carves[0].retired && ios_tail_carves[0].fg == IOS_POOL_FG_EXITED);
     }
-    puts("PASS: pool-fg-keep: after 30 s another program may have it; an exit clears the class");
+    puts("PASS: pool-fg-keep: after 30 s another program may have it; an exit marks the class exited (pool-fg-relaunch)");
     fixture_fg = 0;
     return 32 * MB;
 }
@@ -712,6 +721,71 @@ static void trim_tests(void)
     fixture_fg = 0;
 }
 
+/* pool-fg-relaunch: Far Cry 4 behind Ubisoft Connect (2026-11-04 18:11, run 29). Steam starts FarCry4.exe as the program being played; it
+ * runs on 128 MB, hands over to Ubisoft Connect and exits at 24 s; upc.exe starts and asks FEX's 128 MB; 22 s later Ubisoft Connect
+ * starts FarCry4.exe again, for real. On the device upc.exe got the dead game's 128 MB through the cap lift and the real game was
+ * capped at 16 MB. */
+static void relaunch_tests(void)
+{
+    struct proc stub, upc, game, late;
+    size_t got, dead_off, tail_before;
+    unsigned i;
+
+    reset();
+    ios_jit_low_reserved = ios_jit_low_size_global;     /* no region C carves in the device's logs */
+    ios_pool_head_reserve = 48 * MB;
+    fixture_policy = 1;
+    fixture_fg = 1;
+    start(&stub, 0x200, 10, 0x10000000);
+    got = rotate(&stub, 14, 0x10000000);
+    CHECK(got == 128 * MB);
+    dead_off = off_of(stub.code);
+    quit(&stub, 24);
+    for (i = 0; i < ios_tail_carve_n && ios_tail_carves[i].off != dead_off; i++) ;
+    CHECK(i < ios_tail_carve_n && ios_tail_carves[i].retired && ios_tail_carves[i].fg == IOS_POOL_FG_EXITED);
+
+    fixture_fg = 0;                                     /* upc.exe: another program */
+    start(&upc, 0x300, 26, 0x12000000);
+    tail_before = ios_jit_tail_reserved;
+    got = rotate(&upc, 60, 0x12000000);                 /* 36 s after the exit FEX asks 128 MB; the dead game's buffer is ready */
+    CHECK(got == 32 * MB && off_of(upc.code) != dead_off && ios_jit_tail_reserved == tail_before + 32 * MB);
+    CHECK(ios_tail_carves[i].free && ios_tail_carves[i].size == 128 * MB && ios_tail_carves[i].fg == IOS_POOL_FG_EXITED);
+    puts("PASS: pool-fg-relaunch: the launcher gets 32 MB and none of the exited game's 128 MB buffer");
+
+    fixture_fg = 1;                                     /* the real FarCry4.exe, 52 s after the first one ended (17:26 session) */
+    start(&game, 0x400, 72, 0x13000000);
+    got = rotate(&game, 76, 0x13000000);
+    CHECK(got == 128 * MB && off_of(game.code) == dead_off && ios_tail_carves[i].peb == (void *)0x400 && ios_tail_carves[i].fg == 1);
+    puts("PASS: pool-fg-relaunch: the game's restart takes its 128 MB buffer back");
+
+    /* the hold ends: 120 s after an exit another program may have a piece of it (32 MB, never all of it) */
+    quit(&game, 86);
+    fixture_fg = 0;
+    start(&late, 0x500, 205, 0x13000000);
+    CHECK(late.code_size >= 16 * MB && late.code_size < 17 * MB && off_of(late.code) != dead_off);   /* a free run, whole under 1 MB extra */
+    got = rotate(&late, 205, 0x13000000);
+    CHECK(got == 32 * MB && off_of(late.code) != dead_off + 96 * MB);
+    got = rotate(&late, 207, 0x13000000);
+    CHECK(got == 32 * MB && off_of(late.code) == dead_off + 96 * MB);   /* cut from the top of the free run */
+    puts("PASS: pool-fg-relaunch: after 120 s another program may have a 32 MB piece, cut");
+
+    /* without the classes (no game folder) the cap lift is unchanged: a free 128 MB buffer is served whole */
+    reset();
+    ios_jit_low_reserved = ios_jit_low_size_global;
+    ios_pool_head_reserve = 48 * MB;
+    fixture_policy = 0;
+    fixture_fg = 0;
+    start(&stub, 0x200, 10, 0x10000000);
+    CHECK(rotate(&stub, 14, 0x10000000) == 128 * MB);
+    dead_off = off_of(stub.code);
+    quit(&stub, 24);
+    start(&upc, 0x300, 26, 0x12000000);
+    CHECK(rotate(&upc, 30, 0x12000000) == 128 * MB && off_of(upc.code) == dead_off);
+    CHECK(ios_pool_lift_allowed(0, 0, 128 * MB) && ios_pool_lift_allowed(1, 1, 128 * MB) && ios_pool_lift_allowed(1, 0, 32 * MB) &&
+          !ios_pool_lift_allowed(1, 0, 32 * MB + 0x4000));
+    puts("PASS: pool-fg-relaunch: without a game folder nothing changes");
+}
+
 int main(int argc, char **argv)
 {
     void *p = NULL;
@@ -729,6 +803,12 @@ int main(int argc, char **argv)
         }
         else
             trim_tests();
+        free(p);
+        return 0;
+    }
+    if (argc > 1 && !strcmp(argv[1], "relaunch"))
+    {
+        relaunch_tests();
         free(p);
         return 0;
     }
@@ -760,7 +840,8 @@ with tempfile.TemporaryDirectory(prefix='madeira-pool-code-exit-') as directory:
                     '-fno-omit-frame-pointer', '-pthread', str(cfile), '-o', str(binary)], check=True)
     # The allocator's own log lines go to stderr; show them only on failure. The scenarios above were written before pool-merge:
     # they run with it off (its switch restores exactly that behaviour); pool-merge's own scenarios run with the default.
-    for args, env in (([], {'MADEIRA_POOL_CARVE_MERGE': '0'}), (['merge'], {}), (['trim'], {}), (['trim'], {'MADEIRA_POOL_CODE_TRIM': '0'})):
+    for args, env in (([], {'MADEIRA_POOL_CARVE_MERGE': '0'}), (['merge'], {}), (['relaunch'], {}), (['trim'], {}),
+                      (['trim'], {'MADEIRA_POOL_CODE_TRIM': '0'})):
         completed = subprocess.run([str(binary)] + args, capture_output=True, text=True,
                                    env={**{k: v for k, v in os.environ.items()
                                            if k not in ('MADEIRA_POOL_CARVE_MERGE', 'MADEIRA_POOL_CODE_TRIM')}, **env})

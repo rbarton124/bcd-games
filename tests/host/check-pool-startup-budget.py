@@ -44,6 +44,7 @@ helpers = ''.join(function(native, signature) for signature in (
     'static int ios_pool_preserve_code_carve(',
     'static int ios_tail_carve_ready(',
     'static int ios_pool_fg_held(',
+    'static int ios_pool_lift_allowed(',
     'static size_t ios_pool_free_room(',
     'static int ios_pool_fg_keep_size(',
     'static int ios_tail_carve_mergeable(',
@@ -59,7 +60,8 @@ helpers = ''.join(function(native, signature) for signature in (
 carve_start = native.index('#define IOS_TAIL_CARVE_MAX ')
 carve_table = native[carve_start:native.index('\n\n', carve_start)] + '\n' + '\n'.join(
     line for line in native.splitlines() if line.startswith(('#define IOS_POOL_FG_HOLD_SEC ', '#define IOS_POOL_FG_KEEP_FLOOR ', '#define IOS_POOL_CUT_MIN ',
-                                                             '#define IOS_POOL_TRIM_'))) + '\n' + \
+                                                             '#define IOS_POOL_TRIM_', '#define IOS_POOL_FG_EXITED ',
+                                                             '#define IOS_POOL_FG_EXIT_HOLD_SEC ', '#define IOS_POOL_OTHER_MAX '))) + '\n' + \
     native[native.index('struct ios_code_trim\n{'):native.index('static int ios_pool_code_trim_enabled(void)')]
 
 c_fixture = r'''
@@ -88,6 +90,7 @@ static size_t ios_pool_fg_adjust( size_t budget_cap, size_t head_now, size_t tai
     *is_fg_out = 0;
     return budget_cap;
 }
+static int ios_pool_fg_policy_on(void) { return 0; }   /* madeira-bcd pool-fg-relaunch: no game folder either */
 static size_t ios_jit_hole_off_eff, ios_jit_hole_end_eff;
 static size_t ios_jit_hole2_off, ios_jit_hole2_end;
 static int ios_jit_low_full_logged, wow, lose_race;

@@ -417,11 +417,29 @@ static int ios_pool_path_in_folder( const WCHAR *path, size_t len, const char *f
 #define IOS_POOL_FG_HOLD_SEC   30
 #define IOS_POOL_FG_KEEP_FLOOR (16u * 1024 * 1024)
 
+/* madeira-bcd pool-fg-relaunch: a game started through a launcher is started twice. Steam starts FarCry4.exe, which hands over to
+ * Ubisoft Connect and exits; 22 to 52 s later Ubisoft Connect starts FarCry4.exe again, for real (2026-11-04, four sessions). The
+ * first one ran as the program being played and left a 128 MB buffer behind; the exit cleared its class, and 3 s later upc.exe took
+ * all 128 MB through the cap lift below (a free buffer "costs nothing new"), so the real game started with a 16 MB cap and its DLLs
+ * no longer fit beside the code buffers. A buffer whose program-being-played owner exited is marked IOS_POOL_FG_EXITED and held for
+ * the next program being played for IOS_POOL_FG_EXIT_HOLD_SEC; while the policy is on, the cap lift never takes another program
+ * above IOS_POOL_OTHER_MAX (it gets a piece of that size cut from the free run instead). */
+#define IOS_POOL_FG_EXITED        2
+#define IOS_POOL_FG_EXIT_HOLD_SEC 120
+
 /* 1 when a free carve last handed to the program being played (carve_fg), freed at `freed_at`, is held back from a caller that is not
- * the program being played. */
+ * the program being played: IOS_POOL_FG_HOLD_SEC after the game freed it, IOS_POOL_FG_EXIT_HOLD_SEC after the game exited. */
 static int ios_pool_fg_held( int caller_fg, int carve_fg, time_t freed_at, time_t now )
 {
-    return !caller_fg && carve_fg && now - freed_at < IOS_POOL_FG_HOLD_SEC;
+    return !caller_fg && carve_fg &&
+           now - freed_at < (carve_fg == IOS_POOL_FG_EXITED ? IOS_POOL_FG_EXIT_HOLD_SEC : IOS_POOL_FG_HOLD_SEC);
+}
+
+/* 1 when the cap lift may raise a caller's cap to `want` because a free carve that large is ready: always for the program being
+ * played and without the policy; for another program only up to IOS_POOL_OTHER_MAX. */
+static int ios_pool_lift_allowed( int policy_on, int caller_fg, size_t want )
+{
+    return !policy_on || caller_fg || want <= IOS_POOL_OTHER_MAX;
 }
 
 /* The pool's free room between the head and the tail, the holes left out (0 for inconsistent cursors). */
@@ -4114,7 +4132,7 @@ static unsigned ios_tail_carves_retire_owner( struct ios_tail_carve *carves, uns
         carves[i].retired = 1;
         carves[i].freed_at = now;
         carves[i].peb = NULL;
-        carves[i].fg = 0;
+        carves[i].fg = carves[i].fg ? IOS_POOL_FG_EXITED : 0;   /* madeira-bcd pool-fg-relaunch: held for the game's restart */
         *bytes += carves[i].size;
         retired++;
     }
@@ -6104,6 +6122,14 @@ static size_t ios_pool_fg_adjust( size_t budget_cap, size_t head_now, size_t tai
                  (unsigned long)cap, (unsigned long)budget_cap );
     }
     return cap;
+}
+
+/* madeira-bcd pool-fg-relaunch: 1 when ios_pool_fg_adjust applies its classes (a game folder, the switch not 0). */
+static int ios_pool_fg_policy_on(void)
+{
+    const char *off = getenv( "MADEIRA_POOL_CODE_FOREGROUND" );
+
+    return ios_pool_game_folder_len( getenv( "BCD_GAME_FOLDER" ) ) && !(off && !strcmp( off, "0" ));
 }
 
 /* Translate a PE address to a JIT pool address for a specific process.
@@ -35572,7 +35598,7 @@ static inline __attribute__((always_inline)) NTSTATUS ios_nt_impl_NtAllocateVirt
             /* A retired generation of this size already sitting on the carve
              * free-list costs the pool nothing new: never refuse that. */
             budget_cap = cap;
-            if (alloc_size > cap && !trim_held)
+            if (alloc_size > cap && !trim_held && ios_pool_lift_allowed( ios_pool_fg_policy_on(), carve_fg, alloc_size ))
             {
                 unsigned fi;
                 size_t current = 0;   /* madeira-bcd pool-fg-keep: the largest buffer the caller holds */
