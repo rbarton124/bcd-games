@@ -4041,8 +4041,8 @@ jobs:
         run: python3 tools/check-wine-media-dlls.py app/Madeira/arm64ec-windows
 
       # Far Cry 4 (2026-11-04): the prefix registers CLSID_DxDiagProvider at system32\dxdiagn.dll; without the DLL Ubisoft's
-      # systemdetection64.dll gets no provider and the game reads a null result. dxdiagn.dll and its ddraw.dll come from the
-      # optional extra-DLL build above; they must not go missing silently.
+      # systemdetection64.dll gets no provider and the game reads a null result. dxdiagn-optin.dll and ddraw-optin.dll (opt-in:
+      # env.MADEIRA_OPTIN_DLLS = dxdiagn,ddraw) come from the optional extra-DLL build above; they must not go missing silently.
       - name: Verify the DxDiag provider DLL
         run: python3 tools/check-wine-dxdiag-dll.py app/Madeira/arm64ec-windows
 
