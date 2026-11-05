@@ -11,6 +11,9 @@
 # wer-optin.dll, Wine's own wer.dll for the one game that imports it (see WER below), and
 # wintypes-optin.dll, Wine's own wintypes.dll for the games that import it (see WTY below), and
 # setupapi-optin.dll, the shipped setupapi.dll with a lock round its device node table (see SDL below).
+# Also dxdiagn.dll and the ddraw.dll it imports (2026-11-04, Far Cry 4): the prefix registers CLSID_DxDiagProvider at
+# system32\dxdiagn.dll but no 64-bit DLL was there, so CoCreateInstance failed, Ubisoft's systemdetection64.dll logged "Can't get
+# the IDxDiagProvider" and Far Cry 4 read a field of the null result 33 s into its start.
 # Also (2026-10-22, Resident Evil 2) winedmo.dll, the demuxer DLL nothing shipped imports, and the opt-in
 # mfasfsrcsnk-optin.dll, wmvdecod-optin.dll and wmadmod-optin.dll: Wine's ASF byte stream handler (built with
 # tools/patch-wine-mfasfsrcsnk-winedmo.py) and the WMV and WMA decoder MFTs behind it (see OPTIN_WANT below).
@@ -32,7 +35,7 @@ WANT="msvcr70 msvcr71 msvcr80 msvcr90 msvcr100 msvcr110 msvcrt20 msvcrt40 msvcir
       d3d10 d3d10_1 avifil32 msvfw32 dinput
       wbemprox wbemdisp wmiutils
       riched20 riched32 msftedit gdiplus mlang usp10 cabinet sspicli msxml3 msxml6
-      msasn1 wldp hnetcfg msctf xmllite netprofm d2d1 wmvcore winegstreamer srvcli winedmo
+      msasn1 wldp hnetcfg msctf xmllite netprofm d2d1 wmvcore winegstreamer srvcli winedmo dxdiagn ddraw
       xaudio2_0 xaudio2_1 xaudio2_2 xaudio2_3 xaudio2_4 xaudio2_5 xaudio2_6 xaudio2_7 xaudio2_8 xaudio2_9
       x3daudio1_0 x3daudio1_1 x3daudio1_2 x3daudio1_3 x3daudio1_4 x3daudio1_5 x3daudio1_6 x3daudio1_7
       xapofx1_1 xapofx1_2 xapofx1_3 xapofx1_4 xapofx1_5
