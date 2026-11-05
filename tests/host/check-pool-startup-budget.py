@@ -44,6 +44,8 @@ helpers = ''.join(function(native, signature) for signature in (
     'static int ios_pool_preserve_code_carve(',
     'static int ios_tail_carve_ready(',
     'static int ios_pool_fg_held(',
+    'static size_t ios_pool_other_max_parse(',
+    'static size_t ios_pool_other_max(',
     'static int ios_pool_lift_allowed(',
     'static size_t ios_pool_free_room(',
     'static int ios_pool_fg_keep_size(',

@@ -182,6 +182,13 @@ int main( void )
     /* flat limit for another program, whatever the room; and the 16 MB floor is never lowered */
     for (i = 0; i < 400; i += 16) T( fg_cap( 0x10000000, i * MB, 1, 0 ) <= 32 * MB );
     T( fg_cap( 0x37000000, 0x00800000, 1, 0 ) == 16 * MB );
+    /* pool-fg-other: env.MADEIRA_POOL_CODE_OTHER_MB = 8, 16 or 32; anything else is the 32 MB default (the switch is read once,
+     * after this line: unset in this run) */
+    T( ios_pool_other_max_parse( NULL ) == 32 * MB && ios_pool_other_max_parse( "" ) == 32 * MB &&
+       ios_pool_other_max_parse( "16" ) == 16 * MB && ios_pool_other_max_parse( "8" ) == 8 * MB &&
+       ios_pool_other_max_parse( "32" ) == 32 * MB && ios_pool_other_max_parse( "4" ) == 32 * MB &&
+       ios_pool_other_max_parse( "16 " ) == 32 * MB && ios_pool_other_max_parse( "64" ) == 32 * MB );
+    T( ios_pool_other_max() == 32 * MB && ios_pool_lift_allowed( 1, 0, 32 * MB ) && !ios_pool_lift_allowed( 1, 0, 64 * MB ) );
     /* the folder rule: inside, outside, case, separators, a prefix without a separator, empty */
     T( inside( fc3, game ) );                                                              /* the game, in its bin folder */
     T( inside( fc3, "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Far Cry 3\\farcry3.exe" ) );   /* directly in the folder */

@@ -46,6 +46,8 @@ helpers = ''.join(function(signature) for signature in (
     'static int ios_tail_carve_foreign_release(',
     'static void ios_tail_carves_owner_died(',
     'static int ios_pool_fg_held(',
+    'static size_t ios_pool_other_max_parse(',
+    'static size_t ios_pool_other_max(',
     'static int ios_pool_lift_allowed(',
     'static size_t ios_pool_free_room(',
     'static int ios_pool_fg_keep_size(',
@@ -124,9 +126,10 @@ uintptr_t ios_jit_low_rx_global, ios_jit_low_rw_global;
 size_t ios_jit_low_size_global;
 static size_t ios_jit_pool_size_global, jit_pool_offset, ios_pool_head_reserve;
 static int fixture_fg;   /* pool-fg-keep: the caller is the program being played (check-pool-code-policy.py covers the class) */
-static int fixture_policy;   /* pool-fg-relaunch: the classes apply (another program is held to IOS_POOL_OTHER_MAX) */
+static int fixture_policy;   /* pool-fg-relaunch: the classes apply (another program is held to ios_pool_other_max()) */
 static int ios_pool_fg_policy_on(void) { return fixture_policy; }
 static size_t ios_pool_fg_adjust( size_t budget_cap, size_t head_now, size_t tail_now, int *is_fg_out );
+static size_t ios_pool_other_max(void);
 static volatile size_t ios_jit_low_reserved, ios_jit_tail_reserved;
 static size_t ios_jit_hole_off_eff, ios_jit_hole_end_eff, ios_jit_hole2_off, ios_jit_hole2_end;
 static int ios_jit_low_full_logged;
@@ -137,7 +140,7 @@ static size_t ios_pool_fg_adjust( size_t budget_cap, size_t head_now, size_t tai
 {
     (void)head_now; (void)tail_now;
     *is_fg_out = fixture_fg;
-    return fixture_policy && !fixture_fg && budget_cap > IOS_POOL_OTHER_MAX ? IOS_POOL_OTHER_MAX : budget_cap;
+    return fixture_policy && !fixture_fg && budget_cap > ios_pool_other_max() ? ios_pool_other_max() : budget_cap;
 }
 static uintptr_t owner;
 static int scan_busy, scans, occupied;
@@ -748,8 +751,26 @@ static void relaunch_tests(void)
     start(&upc, 0x300, 26, 0x12000000);
     tail_before = ios_jit_tail_reserved;
     got = rotate(&upc, 60, 0x12000000);                 /* 36 s after the exit FEX asks 128 MB; the dead game's buffer is ready */
-    CHECK(got == 32 * MB && off_of(upc.code) != dead_off && ios_jit_tail_reserved == tail_before + 32 * MB);
+    if (ios_pool_other_max() == 16 * MB)                /* a free 16 MB run (and 16 KB, handed whole) serves it: no new tail */
+        CHECK(got >= 16 * MB && got < 17 * MB && off_of(upc.code) != dead_off && ios_jit_tail_reserved == tail_before);
+    else
+        CHECK(got == 32 * MB && off_of(upc.code) != dead_off && ios_jit_tail_reserved == tail_before + 32 * MB);
     CHECK(ios_tail_carves[i].free && ios_tail_carves[i].size == 128 * MB && ios_tail_carves[i].fg == IOS_POOL_FG_EXITED);
+    if (ios_pool_other_max() == 16 * MB)
+    {   /* pool-fg-other: env.MADEIRA_POOL_CODE_OTHER_MB=16: the launcher's next generation is 16 MB too, the old one reused */
+        size_t before = ios_jit_tail_reserved;
+        got = rotate(&upc, 64, 0x12000000);
+        CHECK(got >= 16 * MB && got < 17 * MB && ios_jit_tail_reserved <= before + 16 * MB);
+        CHECK(ios_tail_carves[i].free && ios_tail_carves[i].size == 128 * MB && ios_tail_carves[i].fg == IOS_POOL_FG_EXITED);
+        /* a free 32 MB buffer nobody holds does not lift it past 16 MB either: it gets a 16 MB piece */
+        ios_jit_tail_reserved += 32 * MB;
+        ios_tail_carves[ios_tail_carve_n++] = (struct ios_tail_carve){ .off = ios_jit_pool_size_global - ios_jit_tail_reserved,
+                                                                       .size = 32 * MB, .free = 1, .freed_at = 1 };
+        got = rotate(&upc, 70, 0x12000000);
+        CHECK(got >= 16 * MB && got < 17 * MB);
+        puts("PASS: pool-fg-other: MADEIRA_POOL_CODE_OTHER_MB=16 holds the launcher to 16 MB buffers; its rotations reuse its own");
+        return;
+    }
     puts("PASS: pool-fg-relaunch: the launcher gets 32 MB and none of the exited game's 128 MB buffer");
 
     fixture_fg = 1;                                     /* the real FarCry4.exe, 52 s after the first one ended (17:26 session) */
@@ -840,11 +861,13 @@ with tempfile.TemporaryDirectory(prefix='madeira-pool-code-exit-') as directory:
                     '-fno-omit-frame-pointer', '-pthread', str(cfile), '-o', str(binary)], check=True)
     # The allocator's own log lines go to stderr; show them only on failure. The scenarios above were written before pool-merge:
     # they run with it off (its switch restores exactly that behaviour); pool-merge's own scenarios run with the default.
-    for args, env in (([], {'MADEIRA_POOL_CARVE_MERGE': '0'}), (['merge'], {}), (['relaunch'], {}), (['trim'], {}),
+    for args, env in (([], {'MADEIRA_POOL_CARVE_MERGE': '0'}), (['merge'], {}), (['relaunch'], {}),
+                      (['relaunch'], {'MADEIRA_POOL_CODE_OTHER_MB': '16'}), (['trim'], {}),
                       (['trim'], {'MADEIRA_POOL_CODE_TRIM': '0'})):
         completed = subprocess.run([str(binary)] + args, capture_output=True, text=True,
                                    env={**{k: v for k, v in os.environ.items()
-                                           if k not in ('MADEIRA_POOL_CARVE_MERGE', 'MADEIRA_POOL_CODE_TRIM')}, **env})
+                                           if k not in ('MADEIRA_POOL_CARVE_MERGE', 'MADEIRA_POOL_CODE_TRIM',
+                                                        'MADEIRA_POOL_CODE_OTHER_MB')}, **env})
         print(completed.stdout, end='')
         if completed.returncode:
             print(completed.stderr, end='')

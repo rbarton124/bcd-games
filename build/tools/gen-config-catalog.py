@@ -160,6 +160,9 @@ OVERLAY = {
                         "never merged, so the pool could refuse one 128 MB buffer with hundreds of MB free in pieces, "
                         "and a 16 KB request took a whole free 16-32 MB buffer. 0 turns both off. Read once per session."},
     # madeira-bcd code-trim (build/ntdll-unix/virtual_ios.c, tools/patch-fex-ios-code-trim.py).
+    "env.MADEIRA_POOL_CODE_OTHER_MB": {"category": "Memory & JIT pool", "title": "Code-buffer limit for the other programs (MB)",
+                "kind": "text", "default": "32",
+                "note": "Default 32. The most a program of the session other than the one you launched (a launcher, its helpers) gets for one FEX code buffer, in MB: 8, 16 or 32; anything else is 32. Only with env.MADEIRA_POOL_CODE_FOREGROUND on and a game folder. A 64-bit game behind a launcher can need 16: Far Cry 4 behind Ubisoft Connect ran eight helpers that took 384 MB of code buffers, and the game's DLLs no longer fit in the JIT pool. Read once per session."},
     "env.MADEIRA_POOL_CODE_TRIM": {"category": "Memory & JIT pool", "title": "Idle programs give their code buffers back",
                 "kind": "bool", "default": "1",
                 "note": "On by default. When the program you launched cannot get the code buffer it asks for, the session's "

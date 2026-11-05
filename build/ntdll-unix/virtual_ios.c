@@ -358,12 +358,34 @@ static size_t ios_pool_code_cap( size_t total, size_t head, size_t tail,
  * folder nothing changes; env.MADEIRA_POOL_CODE_FOREGROUND = 0 turns it off. */
 #define IOS_POOL_OTHER_MAX     (32u * 1024 * 1024)
 
+/* madeira-bcd pool-fg-other: env.MADEIRA_POOL_CODE_OTHER_MB, the limit for every other program: 8, 16 or 32 (MB); unset or anything
+ * else: IOS_POOL_OTHER_MAX. With a 64-bit game behind a launcher the limit decides whether the game fits: Far Cry 4 behind Ubisoft
+ * Connect (2026-11-04, run 30, three sessions) ran eight helpers that each took a 16 MB and then a 32 MB buffer (384 MB), and the
+ * pool's image head and code tail met while the game loaded its DLLs. FEX's own floor and halving still apply. */
+static size_t ios_pool_other_max_parse( const char *value )
+{
+    if (value && !strcmp( value, "8" )) return 8u * 1024 * 1024;
+    if (value && !strcmp( value, "16" )) return 16u * 1024 * 1024;
+    return IOS_POOL_OTHER_MAX;
+}
+
+/* The limit above, read once. */
+static size_t ios_pool_other_max(void)
+{
+    static size_t limit;
+
+    if (!limit) limit = ios_pool_other_max_parse( getenv( "MADEIRA_POOL_CODE_OTHER_MB" ) );
+    return limit;
+}
+
 /* The cap a process may be granted for a new carve: the program being played keeps the budget cap (16 MB floor); any other
- * process is held to IOS_POOL_OTHER_MAX. */
+ * process is held to ios_pool_other_max(). */
 static size_t ios_pool_code_class_cap( int is_fg, size_t budget_cap )
 {
+    size_t other = ios_pool_other_max();
+
     if (is_fg) return budget_cap;
-    return budget_cap > IOS_POOL_OTHER_MAX ? IOS_POOL_OTHER_MAX : budget_cap;
+    return budget_cap > other ? other : budget_cap;
 }
 
 /* The length of the game folder `folder` (the Windows path the app wrote, "C:\..."), without trailing separators, or 0 when it names
@@ -423,7 +445,7 @@ static int ios_pool_path_in_folder( const WCHAR *path, size_t len, const char *f
  * Connect's client took all 128 MB through the cap lift below (a free buffer "costs nothing new"), so the real game started with a
  * 16 MB cap and its DLLs no longer fit beside the code buffers. A buffer whose program-being-played owner exited is marked IOS_POOL_FG_EXITED and held for
  * the next program being played for IOS_POOL_FG_EXIT_HOLD_SEC; while the policy is on, the cap lift never takes another program
- * above IOS_POOL_OTHER_MAX (it gets a piece of that size cut from the free run instead). */
+ * above ios_pool_other_max() (it gets a piece of that size cut from the free run instead). */
 #define IOS_POOL_FG_EXITED        2
 #define IOS_POOL_FG_EXIT_HOLD_SEC 120
 
@@ -436,10 +458,10 @@ static int ios_pool_fg_held( int caller_fg, int carve_fg, time_t freed_at, time_
 }
 
 /* 1 when the cap lift may raise a caller's cap to `want` because a free carve that large is ready: always for the program being
- * played and without the policy; for another program only up to IOS_POOL_OTHER_MAX. */
+ * played and without the policy; for another program only up to ios_pool_other_max(). */
 static int ios_pool_lift_allowed( int policy_on, int caller_fg, size_t want )
 {
-    return !policy_on || caller_fg || want <= IOS_POOL_OTHER_MAX;
+    return !policy_on || caller_fg || want <= ios_pool_other_max();
 }
 
 /* The pool's free room between the head and the tail, the holes left out (0 for inconsistent cursors). */
