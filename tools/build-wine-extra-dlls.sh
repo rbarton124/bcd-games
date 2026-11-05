@@ -196,7 +196,8 @@ fi
 # dxdiagn.dll, so CoCreateInstance failed; Ubisoft's systemdetection64.dll logged "Can't get the IDxDiagProvider (CoCreateInstance
 # failed)" and FC64.dll read offset 0x10 of the null result it returned, 33 s into the start. Wine's dxdiagn imports ddraw (above,
 # opt-in too), d3d9, dsound, version, ole32, oleaut32, user32 and advapi32, all shipped: a game lists both, "dxdiagn,ddraw". Many
-# programs ask for the provider and go on without it, hence opt-in.
+# programs ask for the provider and go on without it, hence opt-in. Built with tools/patch-wine-dxdiagn-directshow.py (run 33:
+# Initialize failed on the missing devenum.dll; with the patch the DirectShow section stays empty).
 OPTIN_WANT="dxdiagn dxva2 evr xpsprint sfc sfc_os tbs twinapi.appcore mfasfsrcsnk wmvdecod wmadmod oledlg fwpuclnt sensapi ddraw msi mspatcha odbccp32 sxs rstrtmgr glu32 tdh gamingtcui qwave msvproc xinputuap httpapi"
 OPT=""
 if [ "${MADEIRA_OPTIN_BUILD:-1}" != 0 ]; then
@@ -297,11 +298,27 @@ if [ -n "$MFA" ]; then
         MFA=""
     fi
 fi
+# dxdiagn-optin.dll: Wine's DxDiag provider, patched so a missing DirectShow device enumerator (devenum.dll, not in the set)
+# leaves that section empty instead of failing IDxDiagProvider::Initialize (see the script). A patch that does not apply
+# drops the DLL (an unpatched one fails Initialize here, which is what the game saw without it).
+DXD=""
+case " $OPT " in *" dxdiagn "*) DXD=dxdiagn ;; esac
+if [ -n "$DXD" ]; then
+    if python3 "$R/tools/patch-wine-dxdiagn-directshow.py" "$R/wine"; then
+        rm -f "$B/dlls/dxdiagn/arm64ec-windows/dxdiagn.dll" "$B"/dlls/dxdiagn/arm64ec-windows/*.o
+    else
+        echo "::warning::dxdiagn DirectShow patch did not apply; dxdiagn-optin.dll not shipped"
+        targets="${targets/ dlls\/dxdiagn\/arm64ec-windows\/dxdiagn.dll/}"
+        OPT="${OPT/ dxdiagn/}"
+        DXD=""
+    fi
+fi
 [ -n "$targets" ] && make -C "$B" -k -j"$JOBS" $targets > "$B.build.log" 2>&1
 git -C "$R/wine" checkout -- dlls/msvcrt/main.c dlls/xinput1_3/main.c dlls/d2d1/dc_render_target.c \
     dlls/windows.gaming.input/provider.c dlls/windows.gaming.input/main.c
 for d in $undelayed; do git -C "$R/wine" checkout -- "dlls/$d/Makefile.in"; done
 [ -n "$MFA" ] && git -C "$R/wine" checkout -- dlls/mfsrcsnk/media_source.c
+[ -n "$DXD" ] && git -C "$R/wine" checkout -- dlls/dxdiagn/provider.c
 [ -n "$undelayed" ] && echo "::notice::delay imports linked as plain imports:$undelayed"
 # madeira-bcd: ucrtbase-x64math.dll (see UCX above), from the restored tree:
 # msvcrt/main.c no longer carries the data-sync patch, so the DLL differs from a

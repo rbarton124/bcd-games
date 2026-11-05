@@ -8,7 +8,7 @@ systemdetection64.dll ("Can't get the IDxDiagProvider") hands the game a null re
 fail without failing the build; this check runs after it, as tools/check-wine-media-dlls.py does for the media reader, and
 reuses that script's PE reader. Checks the COM / DirectDraw exports, regular imports only (see UNDELAY in
 build/wine-pe/build-modules.sh), that every import is packaged (an opt-in DLL counts for the other's import, as a game lists
-both), and that neither ships under its own name.
+both), that neither ships under its own name, and that dxdiagn carries tools/patch-wine-dxdiagn-directshow.py's marker.
 """
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
@@ -18,6 +18,7 @@ _spec = spec_from_file_location('check_wine_media_dlls', Path(__file__).with_nam
 _media = module_from_spec(_spec)
 _spec.loader.exec_module(_media)
 PE = _media.PE
+MARKER = 'dxdiagn-directshow-v1 madeira-bcd'   # tools/patch-wine-dxdiagn-directshow.py: Initialize survives a missing devenum.dll
 
 REQUIRED = {
     'dxdiagn-optin.dll': ('DllGetClassObject', 'DllCanUnloadNow'),
@@ -48,6 +49,8 @@ def check(bundle):
                    not (dep.startswith(('api-ms-', 'ext-ms-')) and 'apisetschema.dll' in shipped)}
         if missing:
             raise ValueError(name + ': missing imports ' + ', '.join(sorted(missing)))
+        if name == 'dxdiagn-optin.dll' and MARKER.encode() not in module.data:
+            raise ValueError(name + ': not built from the tree tools/patch-wine-dxdiagn-directshow.py patches (no "%s")' % MARKER)
         print(name + ': exports present; all regular imports packaged (with the other opt-in DLL)')
 
 
