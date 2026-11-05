@@ -417,11 +417,11 @@ static int ios_pool_path_in_folder( const WCHAR *path, size_t len, const char *f
 #define IOS_POOL_FG_HOLD_SEC   30
 #define IOS_POOL_FG_KEEP_FLOOR (16u * 1024 * 1024)
 
-/* madeira-bcd pool-fg-relaunch: a game started through a launcher is started twice. Steam starts FarCry4.exe, which hands over to
- * Ubisoft Connect and exits; 22 to 52 s later Ubisoft Connect starts FarCry4.exe again, for real (2026-11-04, four sessions). The
- * first one ran as the program being played and left a 128 MB buffer behind; the exit cleared its class, and 3 s later upc.exe took
- * all 128 MB through the cap lift below (a free buffer "costs nothing new"), so the real game started with a 16 MB cap and its DLLs
- * no longer fit beside the code buffers. A buffer whose program-being-played owner exited is marked IOS_POOL_FG_EXITED and held for
+/* madeira-bcd pool-fg-relaunch: a game started through a launcher is started twice. Steam starts Far Cry 4, which hands over to
+ * Ubisoft Connect and exits; 22 to 52 s later Ubisoft Connect starts the game again, for real (2026-11-04, four sessions). The
+ * first one ran as the program being played and left a 128 MB buffer behind; the exit cleared its class, and 3 s later Ubisoft
+ * Connect's client took all 128 MB through the cap lift below (a free buffer "costs nothing new"), so the real game started with a
+ * 16 MB cap and its DLLs no longer fit beside the code buffers. A buffer whose program-being-played owner exited is marked IOS_POOL_FG_EXITED and held for
  * the next program being played for IOS_POOL_FG_EXIT_HOLD_SEC; while the policy is on, the cap lift never takes another program
  * above IOS_POOL_OTHER_MAX (it gets a piece of that size cut from the free run instead). */
 #define IOS_POOL_FG_EXITED        2
