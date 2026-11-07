@@ -4508,6 +4508,11 @@ jobs:
         continue-on-error: true   # LAB FORK: a failing check is read from the log; it does not stop the build
         run: python3 tests/host/check-x64-hook-zone.py
 
+      # madeira-bcd tls-index-sync: the loader's TLS slot for an image reaches the pool copy that runs (d3d9-dxmt.dll in Steam's
+      # client read slot 0 and died); the parse and the copy on a synthetic image, and where the protect-time sync calls it.
+      - name: Check the TLS slot in pool copies
+        run: python3 tests/host/check-tls-index-sync.py
+
       # madeira-bcd (upstream port 2026-10-25): env.MADEIRA_IMAGE_LOW_ALIAS = 1 (the narrowed form of an image's address gets a name)
       # and env.MADEIRA_QUERY_CLIP = 1 (VirtualQuery calls only allocatable memory free); both off unless set; the switches and the pure
       # parts run on the host.
