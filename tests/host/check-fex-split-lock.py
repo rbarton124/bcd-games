@@ -142,7 +142,7 @@ def build_and_run(tmp, wow, ios=True):
     exe = Path(tmp) / ("fx-%d-%d" % (wow, ios))
     src.write_text(FIXTURE)
     inc = ["-I" + str(fex / d) for d in ("CodeEmitter", "FEXCore/include", "FEXHeaderUtils", "External/fmt/include")]
-    flags = ["-std=c++20", "-O1", "-Wall", "-Werror", "-Wno-unused-function"] + (["-DWOW_TMPS"] if wow else []) + (["-DFEX_IOS_HOST=1"] if ios else [])
+    flags = ["-std=c++20", "-O1", "-Wall", "-Werror", "-Wno-unused-function", "-Wno-unused-const-variable"] + (["-DWOW_TMPS"] if wow else []) + (["-DFEX_IOS_HOST=1"] if ios else [])
     r = subprocess.run([os.environ.get("CXX", "c++"), *flags, *inc, str(src), "-o", str(exe)], capture_output=True, text=True)
     if r.returncode:
         return None, r.stderr
@@ -193,6 +193,8 @@ with tempfile.TemporaryDirectory() as tmp:
             continue
         exe_off, err = build_and_run(tmp, wow, ios=False)
         check("and without FEX_IOS_HOST", exe_off is not None, err)
+        if exe_off is None:
+            continue
         lock, rows = run(exe, None)
         _, rows_off = run(exe, "0")
         _, rows_one = run(exe, "1")
