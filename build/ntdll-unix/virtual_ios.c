@@ -37477,7 +37477,8 @@ static inline __attribute__((always_inline)) NTSTATUS ios_nt_impl_NtAllocateVirt
             }
             tail_cap = cap;
 
-            if (alloc_size > cap && (!low_fits || carve_other)) {   /* pool-fg: region C's room is no exception for the others */
+            if (carve_other && alloc_size > cap) low_fits = 0;   /* pool-fg: region C's room is no exception for the others */
+            if (alloc_size > cap && !low_fits) {
                 static int cap_log_n;
                 if (cap_log_n < 16) {
                     cap_log_n++;
