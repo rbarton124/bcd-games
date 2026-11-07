@@ -13010,6 +13010,50 @@ static NTSTATUS ios_gl_stub_unix_call(void *args) {
     return STATUS_NOT_SUPPORTED;
 }
 
+/* madeira-bcd gl-empty-extensions (2026-11-07): env.MADEIRA_GL_EMPTY_EXTENSIONS = 1 (default off) answers a 64-bit program's
+ * glGetString(GL_EXTENSIONS) with "" (no extensions) instead of NULL.
+ *
+ * Far Cry 4 (runs 34 and 35): Ubisoft's systemdetection64.dll creates a window and an OpenGL context, ignores that the creation
+ * failed (no pixel format: there is no OpenGL here), calls glGetString(GL_EXTENSIONS) and hands the result to its own strstr,
+ * whose ASSERT(string) (gear/string/str.inl line 1675) ends in an int3: the game exits with 0x80000003 right after
+ * "DetectionOpenGlWindow". With an empty string the five extension searches find nothing and the detection goes on. Every
+ * other name, and every other call, stays NOT_SUPPORTED; the 32-bit table is not touched. Read once per process.
+ *
+ * unix_glGetString is code 130 in dlls/opengl32/unixlib.h of the pinned wine, and the shipped arm64ec-windows/opengl32.dll
+ * passes 130 (tests/host/check-gl-empty-extensions.py reads it from the DLL); the 64-bit arguments are { TEB *teb; GLenum
+ * name; const GLubyte *ret; }. */
+#define IOS_GL_UNIX_GLGETSTRING 130
+#define IOS_GL_EXTENSIONS 0x1F03
+struct ios_gl_get_string_params { void *teb; unsigned int name; const unsigned char *ret; };
+
+static int ios_gl_empty_extensions_enabled( void )
+{
+    static int cached = -1;
+    if (cached < 0)
+    {
+        const char *s = getenv( "MADEIRA_GL_EMPTY_EXTENSIONS" );
+        cached = (s && s[0] == '1' && !s[1]) ? 1 : 0;
+    }
+    return cached;
+}
+
+static NTSTATUS ios_gl_stub_get_string( void *args )
+{
+    static const unsigned char empty[1];
+    static int said;
+    struct ios_gl_get_string_params *p = args;
+    NTSTATUS status = ios_gl_stub_unix_call( args );   /* marks the process as an OpenGL caller, as before */
+
+    if (p->name != IOS_GL_EXTENSIONS || !ios_gl_empty_extensions_enabled()) return status;
+    p->ret = empty;
+    if (said < 4)
+    {
+        said++;
+        dprintf( 2, "[gl-empty-ext] glGetString(GL_EXTENSIONS) -> \"\" (no OpenGL here; env.MADEIRA_GL_EMPTY_EXTENSIONS = 1)\n" );
+    }
+    return STATUS_SUCCESS;
+}
+
 /* iOS-Madeira 2026-07-10: the unixlib "funcs" value handed back to the PE
  * side is a TABLE that __wine_unix_call_dispatcher indexes as
  * funcs[code](args) — storing a bare function there makes UNIX_CALL read
@@ -13024,6 +13068,9 @@ static unixlib_entry_t ios_stub_unix_call_table[IOS_STUB_TABLE_SIZE];
  * the DLL load; every real wgl/gl call fails with NOT_SUPPORTED (no host
  * GL on iOS — DXMT is D3D-only, callers must treat GL as absent). */
 static unixlib_entry_t ios_gl_stub_unix_call_table[IOS_STUB_TABLE_SIZE];
+/* madeira-bcd gl-empty-extensions: the 32-bit callers' table, as the shared one was before (its glGetString arguments are
+ * 32-bit and get no answer). */
+static unixlib_entry_t ios_gl_stub_wow64_unix_call_table[IOS_STUB_TABLE_SIZE];
 
 static pthread_once_t ios_stub_tables_once = PTHREAD_ONCE_INIT;
 static void ios_init_stub_tables(void)
@@ -13033,10 +13080,11 @@ static void ios_init_stub_tables(void)
     {
         ios_stub_unix_call_table[i] = ios_stub_unix_call;
         ios_gl_stub_unix_call_table[i] = ios_gl_stub_unix_call;   /* round 624: NOT_SUPPORTED, as ios_stub_unix_call, and the mark */
+        ios_gl_stub_wow64_unix_call_table[i] = ios_gl_stub_unix_call;
     }
-    ios_gl_stub_unix_call_table[0] = ios_stub_unix_call_ok;  /* process_attach */
-    ios_gl_stub_unix_call_table[1] = ios_stub_unix_call_ok;  /* thread_attach */
-    ios_gl_stub_unix_call_table[2] = ios_stub_unix_call_ok;  /* process_detach */
+    for (i = 0; i < 3; i++)   /* process_attach, thread_attach, process_detach */
+        ios_gl_stub_unix_call_table[i] = ios_gl_stub_wow64_unix_call_table[i] = ios_stub_unix_call_ok;
+    ios_gl_stub_unix_call_table[IOS_GL_UNIX_GLGETSTRING] = ios_gl_stub_get_string;   /* gl-empty-extensions, 64-bit only */
 }
 
 /* DXMT's unix call table, statically linked into Madeira.app via
@@ -13463,7 +13511,8 @@ static NTSTATUS load_builtin_unixlib( void *module, BOOL wow, const void **funcs
             WARN_(module)("iOS: module %p (%s) -> GL-absent stub table (attach ok, wgl/gl NOT_SUPPORTED)\n",
                           module, match);
             libname = "opengl32 (GL-absent stub table)";
-            funcs64 = funcs_wow64 = (const void *)ios_gl_stub_unix_call_table;
+            funcs64 = (const void *)ios_gl_stub_unix_call_table;
+            funcs_wow64 = (const void *)ios_gl_stub_wow64_unix_call_table;
         } else {
             pthread_once( &ios_stub_tables_once, ios_init_stub_tables );
             WARN_(module)("iOS: no unix .so for module %p (unix_path=%s, modname=%s, mapped=%s), using stub table\n",

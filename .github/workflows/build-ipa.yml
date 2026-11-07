@@ -4513,6 +4513,11 @@ jobs:
       - name: Check the TLS slot in pool copies
         run: python3 tests/host/check-tls-index-sync.py
 
+      # madeira-bcd gl-empty-extensions: env.MADEIRA_GL_EMPTY_EXTENSIONS = 1 answers a 64-bit glGetString(GL_EXTENSIONS) with ""
+      # (Far Cry 4's hardware detection); the stub tables per value of the switch, code 130 read from the shipped opengl32.dll.
+      - name: Check the empty OpenGL extension list
+        run: python3 tests/host/check-gl-empty-extensions.py
+
       # madeira-bcd (upstream port 2026-10-25): env.MADEIRA_IMAGE_LOW_ALIAS = 1 (the narrowed form of an image's address gets a name)
       # and env.MADEIRA_QUERY_CLIP = 1 (VirtualQuery calls only allocatable memory free); both off unless set; the switches and the pure
       # parts run on the host.

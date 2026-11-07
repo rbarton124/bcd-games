@@ -819,6 +819,14 @@ OVERLAY = {
                         "characters at most). It asks the box for its text, a call into the program's own window code, hence off by default.",
                 "sources": ["build/win32u-unix/driver_ios.c"]},
     # round 624 (agent E2 S2b): read by dxgi-src.dll only in the build (tools/patch-dxgi-composition.py), not in a scanned source
+    # gl-empty-extensions (2026-11-07; Far Cry 4's hardware detection)
+    "env.MADEIRA_GL_EMPTY_EXTENSIONS": {"category": "Graphics", "title": "OpenGL extension list: empty instead of none",
+                "kind": "bool", "default": "0",
+                "note": "Default off. 1: a 64-bit program that asks OpenGL for its extension list (glGetString(GL_EXTENSIONS)) gets an "
+                        "empty list instead of nothing; there is still no OpenGL, and every other OpenGL call fails as before. Far Cry "
+                        "4's hardware detection searched that list without checking it and stopped right after \"DetectionOpenGlWindow\" "
+                        "(exit code 0x80000003). Read once when each process starts; a \"[gl-empty-ext]\" line says it answered.",
+                "sources": ["build/ntdll-unix/virtual_ios.c"]},
     "env.MADEIRA_DXGI_COMPOSITION": {"category": "Graphics", "title": "Composition swap chains on the game's window", "kind": "bool",
                 "default": "0",
                 "note": "Default off. 1 (with env.MADEIRA_DXGI_SRC = 1, the source-built dxgi.dll): a swap chain a game creates for "

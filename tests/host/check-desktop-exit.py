@@ -70,6 +70,7 @@ c_stubs = r'''
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 typedef int NTSTATUS;
 typedef NTSTATUS (*unixlib_entry_t)(void *);
@@ -403,7 +404,9 @@ require(virtual.count('&ios_jit_pool_refusals') == 2 and 'unsigned long madeira_
         'the counter has one writer and one reader')
 gl_branch = virtual[virtual.index('} else if (match && strstr(match, "opengl32")) {'):]
 gl_branch = gl_branch[:gl_branch.index('} else {')]
-require('funcs64 = funcs_wow64 = (const void *)ios_gl_stub_unix_call_table;' in gl_branch, 'opengl32 still gets the OpenGL stub table for both bitnesses')
+require('funcs64 = (const void *)ios_gl_stub_unix_call_table;' in gl_branch
+        and 'funcs_wow64 = (const void *)ios_gl_stub_wow64_unix_call_table;' in gl_branch,
+        'opengl32 still gets an OpenGL stub table for each bitness (the 64-bit one answers glGetString, gl-empty-extensions)')
 require('unsigned int madeira_child_ends_since(unsigned int after, char *buf, int len);' in header
         and 'unsigned long madeira_jit_pool_refusals(void);' in header, 'the bridge declares both functions as the engine defines them')
 require('unsigned int madeira_child_ends_since( unsigned int after, char *buf, int len )' in process, 'process_ios.c defines the reader')
