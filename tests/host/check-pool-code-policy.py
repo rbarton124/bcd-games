@@ -14,7 +14,7 @@ Checks:
      lift for a ready free 128 MB carve but a 16 MB piece cut from it, while the game gets the lift (and so does everyone with
      the switch unset or no game folder); region C's room is no way past the 16 MB either; a carve the game freed is not
      another program's for 120 s, the game takes it back at once; a run merged from the game's carve and another program's
-     keeps the hold while it lasts, and a spent hold is not renewed by such a merge; a new or reused carve takes its
+     keeps the hold until the game's carve's own 120 s end, and a spent hold is not renewed by such a merge; a new or reused carve takes its
      holder's class; Far Cry 4 relaunched through Ubisoft Connect: FarCry4.exe #1 exits leaving 128 MB, upc.exe asks 22 s
      later and gets 16 MB elsewhere, FarCry4.exe #2 gets the 128 MB back (with the switch unset upc.exe takes it, the game
      starts on 16 MB);
@@ -352,10 +352,10 @@ static void hold(void)
     give_back(&game, g, 128 * MB);
     fake_now = 2010;
     give_back(&upc, u, 16 * MB);                     /* another program's release joins the game's carve */
-    CHECK(ios_tail_carve_n == 1 && at(u)->size == 144 * MB && at(u)->fg && at(u)->freed_at == 2010);
-    fake_now = 2020;
+    CHECK(ios_tail_carve_n == 1 && at(u)->size == 144 * MB && at(u)->fg && at(u)->freed_at == 2000);   /* the hold keeps its end */
+    fake_now = 2000 + IOS_POOL_FG_HOLD_SEC - 1;
     CHECK(fex_ask(&upc, 16 * MB, &rx) == 16 * MB && rx == pool + POOL - 160 * MB);
-    fake_now = 2010 + IOS_POOL_FG_HOLD_SEC;
+    fake_now = 2000 + IOS_POOL_FG_HOLD_SEC;   /* not 120 s after the other program's release */
     CHECK(fex_ask(&upc, 16 * MB, &rx) == 16 * MB && rx == (char *)u + 128 * MB && !at(rx)->fg);
 
     reset("1");
@@ -381,7 +381,7 @@ static void hold(void)
     CHECK(ios_tail_carve_n == 1 && at(g)->size == 128 * MB && !at(g)->fg);
     fake_now += 10;
     CHECK(fex_ask(&upc, 16 * MB, &rx) == 16 * MB && rx == u);
-    puts("PASS: a run keeps the game's hold while it lasts, and a spent one is not renewed by another program's release; "
+    puts("PASS: a run keeps the game's hold while it lasts and no longer, and a spent one is not renewed by another program's release; "
          "a reused carve takes its new holder's class");
 }
 

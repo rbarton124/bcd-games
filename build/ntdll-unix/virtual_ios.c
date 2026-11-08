@@ -4230,10 +4230,16 @@ static unsigned ios_tail_carves_merge( struct ios_tail_carve *carves, unsigned *
         { j++; continue; }
         if (carves[j].off < carves[i].off) carves[i].off = carves[j].off;
         carves[i].size += carves[j].size;
-        /* a part's hold counts while it is in force at the other part's release, so an expired one is not renewed */
-        carves[i].fg = ios_pool_fg_held( 1, carves[i].fg, carves[i].freed_at, carves[j].freed_at ) ||
-                       ios_pool_fg_held( 1, carves[j].fg, carves[j].freed_at, carves[i].freed_at );
-        if (carves[j].freed_at > carves[i].freed_at) carves[i].freed_at = carves[j].freed_at;
+        {
+            /* a part's hold counts while it is in force at the other part's release and keeps its own end: an expired one is
+             * not renewed, a live one not stretched by the other part's later release (the run's time is then the held part's) */
+            int held_i = ios_pool_fg_held( 1, carves[i].fg, carves[i].freed_at, carves[j].freed_at );
+            int held_j = ios_pool_fg_held( 1, carves[j].fg, carves[j].freed_at, carves[i].freed_at );
+            time_t later = carves[j].freed_at > carves[i].freed_at ? carves[j].freed_at : carves[i].freed_at;
+
+            carves[i].freed_at = held_i == held_j ? later : held_i ? carves[i].freed_at : carves[j].freed_at;
+            carves[i].fg = held_i || held_j;
+        }
         carves[j] = carves[--*n];
         if (i == *n) i = j;   /* the last entry, now at j, was the run */
         j = 0;                /* the grown run may touch another */
