@@ -7323,7 +7323,8 @@
         {"line": "env.MADEIRA_POOL_CODE_FOREGROUND = 1", "minBuild": 635},
         {"line": "env.MADEIRA_SLEEP_KERNEL_APC = 1", "minBuild": 635},
         {"line": "env.MADEIRA_WOA_RECHECK = 1", "minBuild": 635},
-        {"line": "env.MADEIRA_KILL_REAP = 1", "minBuild": 635}
+        {"line": "env.MADEIRA_KILL_REAP = 1", "minBuild": 635},
+        {"line": "env.MADEIRA_PAD_MODE = xbox360", "minBuild": 635}
       ],
       "notes": [
         "Far Cry 4 (Steam 298110, 64-bit, started by Ubisoft Connect): build 635, one iPhone, a Steam copy through BCD Dock; two sessions of",
@@ -7335,7 +7336,10 @@
         "starter ends a suspended copy of the game it could not inject into; env.MADEIRA_KILL_REAP = 1 releases what that copy held, and",
         "env.MADEIRA_POOL_CODE_FOREGROUND = 1 keeps FarCry4.exe's code buffers for it while Ubisoft Connect's processes get at most 16 MB",
         "each. The JIT pool must be split (about 835 MB needed); a session whose pool stayed at 560-720 MB did not start. Ubisoft Connect's",
-        "lines (SLEEP_KERNEL_APC, WOA_RECHECK) are as Far Cry 3's."
+        "lines (SLEEP_KERNEL_APC, WOA_RECHECK) are as Far Cry 3's. The game reads a controller through XInput only after it finds an",
+        "Xbox controller among the devices: env.MADEIRA_PAD_MODE = xbox360 adds the device Windows lists beside a wired Xbox 360 pad (on",
+        "the device test the on-screen controller then worked; without it the pad and the on-screen controller did nothing, and a",
+        "generic HID pad got the game's fallback map: LB the pause menu, RB the map)."
       ]
     },
     {
