@@ -142,9 +142,9 @@ final class GamepadInput: @unchecked Sendable {
         if kind == "generic", let name = first?.vendorName { setenv("MADEIRA_HIDPAD_NAME", name, 1) }
         Self.sessionHIDKind = kind
         // The Xbox 360 identity is the device beside an XInput pad: player 1 stays on XInput, as on Windows. For the others the
-        // game's own file first, as the mode above: its env lines reach the process environment only after this runs.
-        let keepXInput = kind == "xbox360" || (MadeiraConfig.gameValue("env.MADEIRA_HIDPAD_XINPUT") ?? MadeiraConfig.get("env.MADEIRA_HIDPAD_XINPUT")
-            ?? ProcessInfo.processInfo.environment["MADEIRA_HIDPAD_XINPUT"]) == "1"
+        // game's own file as well, as the mode above and MADEIRA_PAD_EARLY_SLOT (round 630): its env lines reach the process
+        // environment only after this runs.
+        let keepXInput = kind == "xbox360" || MadeiraConfig.gameValue("env.MADEIRA_HIDPAD_XINPUT") == "1" || Self.optIn("MADEIRA_HIDPAD_XINPUT")
         queue.async { [self] in hidActive = true; hidKeepsXInput = keepXInput; sample() }
         LogStore.shared.log("[hid-pad] ml2100 session mode=\(mode.value) source=\(mode.source) kind=\(kind) "
                             + "pad=\(first?.productCategory ?? "none") xinput-slot0=\(keepXInput ? "kept" : "off")")
