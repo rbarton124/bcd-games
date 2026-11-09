@@ -444,7 +444,7 @@ struct RecommendationsPolicy {
         "MADEIRA_GPU_STALL_MS",   // build 624 (agent D2 S15, Just Cause 3): a command buffer unfinished that many ms is named; 100 to 60000 (checked below)
         "DXMT_QUERY_TS_WATCHDOG",   // build 624 (agent D2 S11, WRC 9): a timestamp query pending 2 s is answered as complete; 1 only (checked below)
         "MADEIRA_AUDIO_IO_MS",   // build 625 (Dead Rising's crackle, agent D1 S3-b): the audio IO buffer iOS is asked for; 1 to 100 ms (checked below)
-        "MADEIRA_AUDIO_LEAD_MS",   // build 635 lists (Far Cry 3): the audio lead kept in the ring, read since before 600; 0 or 10 to 500 ms (checked below)
+        "MADEIRA_AUDIO_LEAD_MS",   // build 635 lists (Far Cry 3, Far Cry 4): the audio lead kept in the ring, read since before 600; 0 or 10 to 500 ms (checked below)
         "MADEIRA_MIP_CLAMP_AUTO",   // build 625 (Outlast 2, agent L4 2.6): DXMT's memory-pressure BC texture clamp (read since ml2000); 0 or 1 (checked below)
         "MADEIRA_MFC32",   // build 625 (the owner's item 26): Microsoft's 32-bit MFC, downloaded in Settings, in a 32-bit game's syswow64; 0 or 1 (checked below)
         "MADEIRA_X86_FAULT_DUMP",

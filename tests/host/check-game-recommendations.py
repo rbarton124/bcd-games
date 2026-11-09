@@ -1384,15 +1384,16 @@ assert _tlou['version'] == 1 and _tlou['minBuild'] == 634 and _tlou['switches'] 
 assert presets['the-last-of-us-part-1']['lines'][2:] == ['env.MADEIRA_EC_HOOK_TRACE = 0', 'env.MADEIRA_JUMBO_CODE_DUMP = 1', 'env.MADEIRA_BIG_HINT_EXACT = 1'] \
     and presets['the-last-of-us-part-1']['line_builds'][3:] == [(634, 1000000000), (634, 1000000000)], presets['the-last-of-us-part-1']
 # Build 635 (Ubisoft Connect's games): Far Cry 4 starts with build 635, whose switches it needs (the DxDiag provider, the OpenGL extension list,
-# the hook zone, the code-buffer policy, the three Ubisoft Connect lines and the Xbox 360 controller identity), so no older build gets the rule; Ubisoft Connect v2 re-checks its
+# the hook zone, the code-buffer policy, the three Ubisoft Connect lines, the Xbox 360 controller identity and the plain audio beat), so no older build gets the rule; Ubisoft Connect v2 re-checks its
 # infinite waits on an address from build 635.
 _fc4 = _rules632['far-cry-4']
 assert _fc4['version'] == 1 and _fc4['minBuild'] == 635 and 'switches' not in _fc4, _fc4
 assert presets['far-cry-4']['lines'][2:] == ['env.MADEIRA_EC_HOOK_TRACE = 0', 'env.MADEIRA_X64_IMAGE_NOCOPY = 1', 'pool-split = 1', 'pool-split-retry = 1',
                                              'env.MADEIRA_D3D9_X64 = dxmt', 'env.MADEIRA_OPTIN_DLLS = dxdiagn,ddraw', 'env.MADEIRA_GL_EMPTY_EXTENSIONS = 1',
                                              'env.MADEIRA_X64_HOOK_ZONE = 1', 'env.MADEIRA_POOL_CODE_FOREGROUND = 1', 'env.MADEIRA_SLEEP_KERNEL_APC = 1',
-                                             'env.MADEIRA_WOA_RECHECK = 1', 'env.MADEIRA_KILL_REAP = 1', 'env.MADEIRA_PAD_MODE = xbox360'] \
-    and presets['far-cry-4']['line_builds'][2:] == [(0, 1000000000)] * 5 + [(635, 1000000000)] * 8, presets['far-cry-4']
+                                             'env.MADEIRA_WOA_RECHECK = 1', 'env.MADEIRA_KILL_REAP = 1', 'env.MADEIRA_PAD_MODE = xbox360',
+                                             'env.MADEIRA_AUDIO_LEAD_MS = 0'] \
+    and presets['far-cry-4']['line_builds'][2:] == [(0, 1000000000)] * 5 + [(635, 1000000000)] * 9, presets['far-cry-4']
 _uc = _rules632['ubisoft-connect']
 assert _uc['version'] == 2 and presets['ubisoft-connect']['lines'][2:] == ['env.MADEIRA_EC_HOOK_TRACE = 0', 'env.MADEIRA_X86_FAULT_DUMP = 1',
                                                                            'env.MADEIRA_WOA_RECHECK = 1'] \

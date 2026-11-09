@@ -7324,7 +7324,8 @@
         {"line": "env.MADEIRA_SLEEP_KERNEL_APC = 1", "minBuild": 635},
         {"line": "env.MADEIRA_WOA_RECHECK = 1", "minBuild": 635},
         {"line": "env.MADEIRA_KILL_REAP = 1", "minBuild": 635},
-        {"line": "env.MADEIRA_PAD_MODE = xbox360", "minBuild": 635}
+        {"line": "env.MADEIRA_PAD_MODE = xbox360", "minBuild": 635},
+        {"line": "env.MADEIRA_AUDIO_LEAD_MS = 0", "minBuild": 635}
       ],
       "notes": [
         "Far Cry 4 (Steam 298110, 64-bit, started by Ubisoft Connect): build 635, one iPhone, a Steam copy through BCD Dock; two sessions of",
@@ -7339,7 +7340,8 @@
         "lines (SLEEP_KERNEL_APC, WOA_RECHECK) are as Far Cry 3's. The game reads a controller through XInput only after it finds an",
         "Xbox controller among the devices: env.MADEIRA_PAD_MODE = xbox360 adds the device Windows lists beside a wired Xbox 360 pad (on",
         "the device test the on-screen controller then worked; without it the pad and the on-screen controller did nothing, and a",
-        "generic HID pad got the game's fallback map: LB the pause menu, RB the map)."
+        "generic HID pad got the game's fallback map: LB the pause menu, RB the map). Its audio breaks up with the 60 ms audio lead and",
+        "plays cleanly with the plain beat (env.MADEIRA_AUDIO_LEAD_MS = 0), as Far Cry 3's does."
       ]
     },
     {
