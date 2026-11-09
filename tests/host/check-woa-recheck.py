@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2026 Russell Barton
 """env.MADEIRA_WOA_RECHECK = 1 (tools/patch-wine-woa-recheck.py): an infinite RtlWaitOnAddress re-checks its entry every second.
 
 Why: Ubisoft Connect's browser (upc.exe, 32-bit) stopped in 2 of 11 Far Cry 3 starts with threads parked for 80-100 s on

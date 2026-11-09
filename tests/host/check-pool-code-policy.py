@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2026 Russell Barton
 """env.MADEIRA_POOL_CODE_FOREGROUND = 1: the session's other programs get FEX code buffers of at most 16 MB, and a buffer the
 program being played freed or left behind is held for it for 120 s (virtual_ios.c pool-fg).
 

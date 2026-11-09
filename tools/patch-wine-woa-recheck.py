@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2026 Russell Barton
 """madeira-bcd woa-recheck: with env.MADEIRA_WOA_RECHECK = 1 an infinite wait on an address re-checks its entry every second
 (32-bit Windows side).
 

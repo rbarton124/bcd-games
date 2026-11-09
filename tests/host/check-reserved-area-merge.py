@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2026 Russell Barton
 """A generic reserved area never swallows a FEX or thin area that follows it (virtual_ios.c mmap_add_reserved_area).
 
 ml799 keeps a generic range from merging INTO the FEX arena when the range lands on it, but the merge loop that joins an extended

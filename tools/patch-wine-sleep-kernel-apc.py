@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2026 Russell Barton
 """madeira-bcd sleep-kernel-apc: with env.MADEIRA_SLEEP_KERNEL_APC = 1 a non-alertable sleep runs queued I/O completions, as on Windows.
 
 On Windows an I/O completion (a kernel-mode APC) runs in any wait, alertable or not; only user APCs

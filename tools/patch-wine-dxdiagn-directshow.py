@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2026 Russell Barton
 """Wine's DxDiag provider (dlls/dxdiagn) initialises without DirectShow's device enumerator.
 
 The prefix registers CLSID_DxDiagProvider at C:\\windows\\system32\\dxdiagn.dll, and BCD ships Wine's dxdiagn

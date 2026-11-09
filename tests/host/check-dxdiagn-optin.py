@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2026 Russell Barton
 """env.MADEIRA_OPTIN_DLLS = dxdiagn,ddraw: Wine's DxDiag provider for a 64-bit program; no Wine runs.
 
 The prefix registers CLSID_DxDiagProvider at system32\\dxdiagn.dll, but only the 32-bit set had the DLL, so a 64-bit program's

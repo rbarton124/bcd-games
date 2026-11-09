@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2026 Russell Barton
 """env.MADEIRA_SELF_WRITE (on unless exactly 0): a program's NtWriteVirtualMemory into its own memory is done in ntdll (virtual_ios.c).
 
 The server writes with the target's task port, which iOS pseudo-processes do not have, so a program's WriteProcessMemory into itself

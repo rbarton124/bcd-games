@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2026 Russell Barton
 """env.MADEIRA_KILL_REAP = 1: a process ended by another one releases what it held, as an exit does (process_ios.c NtTerminateProcess).
 
 A process that another process ends with NtTerminateProcess( its handle ) never runs process_exit_wrapper on iOS, so its FEX code

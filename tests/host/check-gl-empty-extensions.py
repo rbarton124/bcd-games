@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2026 Russell Barton
 """env.MADEIRA_GL_EMPTY_EXTENSIONS = 1: a 64-bit glGetString(GL_EXTENSIONS) gets "" instead of NULL (virtual_ios.c, OpenGL stub table).
 
 Far Cry 4's hardware detection (Ubisoft's systemdetection64.dll) ignores that its OpenGL context could not be created, calls

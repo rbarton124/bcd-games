@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2026 Russell Barton
 """env.MADEIRA_X64_HOOK_ZONE = 1: 16 MB of free address space directly above a 64-bit process's ntdll, for hook code (virtual_ios.c).
 
 A 64-bit hook needs its trampoline within 2 GB of the hooked function. Every pseudo-process shares one address space and 64-bit images

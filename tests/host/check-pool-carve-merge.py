@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2026 Russell Barton
 """env.MADEIRA_POOL_CARVE_MERGE = 1: free FEX code buffers merge, and a free one is cut to the size asked (virtual_ios.c pool-merge).
 
 Checks:

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2026 Russell Barton
 """tls-index-sync: a module's TLS slot reaches the pool copy it runs from (virtual_ios.c, ios_tls_index_off / ios_tls_index_sync).
 
 The loader stores a module's TLS slot in the image it sees (alloc_tls_slot: *AddressOfIndex = slot); an ARM64EC module runs from

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2026 Russell Barton
 """FEX: a guest atomic whose operand crosses a 16-byte boundary is done inline instead of trapping (MADEIRA_FEX_SPLIT_LOCK).
 
 An x86 `xchg [mem], reg` or a `lock xadd/add/sub/and/or/xor` on a misaligned operand is legal and atomic on x86 (a split lock).

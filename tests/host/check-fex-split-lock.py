@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2026 Russell Barton
 """FEX on iOS: a guest atomic whose operand crosses a 16-byte boundary is done inline under a lock (tools/patch-fex-ios-split-lock.py).
 
 Needs the FEX submodule and a host C++ compiler; no Wine, FEX build or game.

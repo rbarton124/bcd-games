@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2026 Russell Barton
 """env.MADEIRA_UBI_CEF (on unless 0): Ubisoft Connect's browser upc.exe gets Chromium's process-count switches
 (process_ios.c ubi_cef_cmdline), and a checked libcef.dll build keeps them (virtual_ios.c ios_ubi_cef_patch: for a build
 listed in ios_ubi_cef_builds the je that discards the command line becomes nop; jmp, in the process's own view).

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2026 Russell Barton
 """env.MADEIRA_SLEEP_KERNEL_APC = 1 (tools/patch-wine-sleep-kernel-apc.py): a non-alertable NtDelayExecution waits in the server.
 
 Why: on iOS send_thread_signal cannot reach a thread, so a system APC (an I/O completion) queued for a thread that sleeps
